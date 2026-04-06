@@ -1,0 +1,63 @@
+{
+  "name": "operatoros-cli",
+  "version": "0.3.1",
+  "description": "OperatorOS CLI — orchestrate AI agent teams to run a business (forked from Paperclip)",
+  "type": "module",
+  "bin": {
+    "operatoros": "./dist/index.js",
+    "paperclipai": "./dist/index.js"
+  },
+  "keywords": [
+    "paperclip",
+    "ai",
+    "agents",
+    "orchestration",
+    "cli"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/paperclipai/paperclip",
+    "directory": "cli"
+  },
+  "homepage": "https://github.com/paperclipai/paperclip",
+  "bugs": {
+    "url": "https://github.com/paperclipai/paperclip/issues"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "node --input-type=module -e \"import esbuild from 'esbuild'; import config from './esbuild.config.mjs'; await esbuild.build(config);\" && node scripts/chmod-dist.mjs",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.10.0",
+    "@operatoros/adapter-claude-local": "workspace:*",
+    "@operatoros/adapter-codex-local": "workspace:*",
+    "@operatoros/adapter-cursor-local": "workspace:*",
+    "@operatoros/adapter-gemini-local": "workspace:*",
+    "@operatoros/adapter-opencode-local": "workspace:*",
+    "@operatoros/adapter-pi-local": "workspace:*",
+    "@operatoros/adapter-openclaw-gateway": "workspace:*",
+    "@operatoros/adapter-utils": "workspace:*",
+    "@operatoros/db": "workspace:*",
+    "@operatoros/server": "workspace:*",
+    "@operatoros/shared": "workspace:*",
+    "drizzle-orm": "0.38.4",
+    "dotenv": "^17.0.1",
+    "commander": "^13.1.0",
+    "embedded-postgres": "^18.1.0-beta.16",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.12.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
