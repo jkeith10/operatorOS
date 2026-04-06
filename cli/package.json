@@ -17,12 +17,12 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
+    "url": "https://github.com/jkeith10/operatorOS",
     "directory": "cli"
   },
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "homepage": "https://github.com/jkeith10/operatorOS",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/jkeith10/operatorOS/issues"
   },
   "files": [
     "dist"
@@ -61,4 +61,3 @@
     "typescript": "^5.7.3"
   }
 }
-

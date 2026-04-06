@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "Stable public API for Paperclip plugins — worker-side context and UI bridge hooks",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "homepage": "https://github.com/jkeith10/operatorOS",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/jkeith10/operatorOS/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
+    "url": "https://github.com/jkeith10/operatorOS",
     "directory": "packages/plugins/sdk"
   },
   "type": "module",
@@ -124,4 +124,3 @@
     }
   }
 }
-

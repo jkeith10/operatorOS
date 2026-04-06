@@ -3,13 +3,13 @@
   "version": "0.3.1",
   "description": "Prebuilt Paperclip board UI assets.",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/paperclipai/paperclip",
+  "homepage": "https://github.com/jkeith10/operatorOS",
   "bugs": {
-    "url": "https://github.com/paperclipai/paperclip/issues"
+    "url": "https://github.com/jkeith10/operatorOS/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/paperclipai/paperclip",
+    "url": "https://github.com/jkeith10/operatorOS",
     "directory": "ui"
   },
   "type": "module",
@@ -70,4 +70,3 @@
     "vitest": "^3.0.5"
   }
 }
-
