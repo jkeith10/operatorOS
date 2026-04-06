@@ -1,0 +1,43 @@
+# Publishes packages to npm using GitHub ↔ npm Trusted Publisher (OIDC).
+# Configure this filename in npm package Settings → Trusted Publisher.
+#
+# Bump the package version(s) before running; npm rejects duplicate versions.
+
+name: Publish npm (OIDC)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-shared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build @operatoros/shared
+        run: pnpm --filter @operatoros/shared build
+
+      - name: Publish @operatoros/shared
+        working-directory: packages/shared
+        run: npm publish --access public --provenance
