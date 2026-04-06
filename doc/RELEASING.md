@@ -249,3 +249,37 @@ Then fix forward with a new stable release.
 - [`scripts/rollback-latest.sh`](../scripts/rollback-latest.sh)
 - [`doc/PUBLISHING.md`](PUBLISHING.md)
 - [`doc/RELEASE-AUTOMATION-SETUP.md`](RELEASE-AUTOMATION-SETUP.md)
+
+## GitHub repository settings (OperatorOS upstream)
+
+Use these for [`github.com/jkeith10/operatorOS`](https://github.com/jkeith10/operatorOS) (or adapt for your fork).
+
+### About (tight description)
+
+- **Description:** `AI agent control plane—goals, governance, budgets, board UI. Apache-2.0. Fork of Paperclip.`
+- **Website:** `https://github.com/jkeith10/operatorOS`
+- **Topics (suggested):** `operatoros`, `ai-agents`, `multi-agent-systems`, `orchestration`, `openclaw`, `paperclip`, `typescript`, `react`, `nodejs`
+
+With [GitHub CLI](https://cli.github.com/) authenticated, from the repo root you can apply the description, homepage, and topics via:
+
+```powershell
+./scripts/configure-github-operatoros.ps1
+```
+
+### Branch protection for `main`
+
+In **Settings → Branches** (or **Rules → Rulesets**), protect `main` with at least:
+
+1. **Require a pull request before merging** (set required approvals to 0–1 to match your solo vs team workflow).
+2. **Do not allow bypassing the above settings** for admins only if you want everyone—including admins—to use PRs.
+3. **Block force pushes** to `main`.
+4. **Block branch deletion** for `main`.
+
+Optional but recommended as CI matures:
+
+- Require status checks to pass before merge (e.g. `typecheck` / `test` from Actions).
+- Require conversation resolution for review threads.
+
+### npm scope alignment
+
+Publishable packages use the **`@operatoros/*`** scope; ensure the **`operatoros`** npm organization exists and your account can publish to it. Details: [`doc/PUBLISHING.md`](PUBLISHING.md).

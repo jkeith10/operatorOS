@@ -4,7 +4,7 @@ Guidance for human and AI contributors working in this repository.
 
 ## 1. Purpose
 
-**OperatorOS** is a control plane for AI-agent companies. This repository is a fork of the open-source **Paperclip** project; see `NOTICE` and `LICENSE`.
+**OperatorOS** is a control plane for AI-agent companies. This repository is a fork of the open-source **Paperclip** project. It is licensed under **Apache 2.0** (`LICENSE`, `NOTICE`); upstream Paperclip remains **MIT**.
 
 The current implementation target is V1 and is defined in `doc/SPEC-implementation.md`.
 
@@ -31,6 +31,8 @@ Before making changes, read in this order:
 - `packages/adapter-utils/`: shared adapter utilities
 - `packages/plugins/`: plugin system packages
 - `doc/`: operational and product docs
+
+Publishable workspace packages use the npm scope **`@operatoros/*`**; releasing requires the **`operatoros`** npm org (see `doc/PUBLISHING.md`).
 
 ## 4. Dev Setup (Auto DB)
 

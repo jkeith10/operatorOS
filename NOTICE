@@ -1,9 +1,12 @@
 OperatorOS
 
+Copyright 2025 OperatorOS contributors
+
 This project is a derivative work based on Paperclip, an open-source project
 Copyright (c) Paperclip and contributors.
 
 The upstream Paperclip source is available under the MIT License at:
 https://github.com/paperclipai/paperclip
 
-See the LICENSE file in this repository for the terms governing this copy.
+This repository is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full terms governing this copy.

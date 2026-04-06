@@ -1,7 +1,7 @@
 {
   "name": "@operatoros/db",
   "version": "0.3.1",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/paperclipai/paperclip",
   "bugs": {
     "url": "https://github.com/paperclipai/paperclip/issues"
@@ -57,3 +57,4 @@
     "vitest": "^3.0.5"
   }
 }
+

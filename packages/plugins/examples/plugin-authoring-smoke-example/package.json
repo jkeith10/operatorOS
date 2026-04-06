@@ -24,7 +24,7 @@
     "connector"
   ],
   "author": "Plugin Author",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@operatoros/plugin-sdk": "workspace:*"
   },
@@ -43,3 +43,4 @@
     "react": ">=18"
   }
 }
+

@@ -2,7 +2,7 @@
   "name": "@operatoros/plugin-sdk",
   "version": "1.0.0",
   "description": "Stable public API for Paperclip plugins — worker-side context and UI bridge hooks",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/paperclipai/paperclip",
   "bugs": {
     "url": "https://github.com/paperclipai/paperclip/issues"
@@ -124,3 +124,4 @@
     }
   }
 }
+

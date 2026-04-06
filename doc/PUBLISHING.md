@@ -1,6 +1,12 @@
 # Publishing to npm
 
-Low-level reference for how Paperclip packages are prepared and published to npm.
+Low-level reference for how OperatorOS packages are prepared and published to npm.
+
+## npm organization and scope
+
+- **Scoped packages:** every publishable workspace package in this repository uses the **`@operatoros/*`** npm scope (see each `package.json` `name` field).
+- **npm org:** you need the **`operatoros`** organization on [npm](https://www.npmjs.com/) (or your chosen org, if you change all package names consistently) and publish permissions on that scope. Until the first publish, `npm view @operatoros/<package>` returns **404**, which only means the scope is not on the registry yet—not that the name is wrong.
+- **CLI:** the CLI may still ship as the unscoped package **`paperclipai`** until it is renamed; that name is independent of the `@operatoros/*` libraries it bundles.
 
 For the maintainer workflow, use [doc/RELEASING.md](RELEASING.md). This document focuses on packaging internals.
 
@@ -111,7 +117,7 @@ Notes:
 If the first real publish returns npm `E404`, check npm-side prerequisites before retrying:
 
 - `npm whoami` must succeed first. An expired or missing npm login will block the publish.
-- For an organization-scoped package like `@operatoros/ui`, the `paperclipai` npm organization must exist and the publisher must be a member with permission to publish to that scope.
+- For an organization-scoped package like `@operatoros/ui`, the **`operatoros`** npm organization (scope `@operatoros`) must exist and the publisher must be a member with permission to publish to that scope. All publishable workspace packages in this repo use the `@operatoros/*` scope; the CLI may still publish as the unscoped name `paperclipai` until renamed.
 - The initial publish must include `--access public` for a public scoped package.
 - npm also requires either account 2FA for publishing or a granular token that is allowed to bypass 2FA.
 
