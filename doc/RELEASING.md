@@ -266,6 +266,8 @@ With [GitHub CLI](https://cli.github.com/) authenticated, from the repo root you
 ./scripts/configure-github-operatoros.ps1
 ```
 
+Continuous integration runs on pushes and PRs to `main` via [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (install, typecheck, tests, build).
+
 ### Branch protection for `main`
 
 In **Settings → Branches** (or **Rules → Rulesets**), protect `main` with at least:

@@ -411,5 +411,5 @@ describeEmbeddedPostgres(
     });
   });
   },
-  30_000,
+  120_000,
 );

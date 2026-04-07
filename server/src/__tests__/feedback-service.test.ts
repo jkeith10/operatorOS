@@ -187,7 +187,8 @@ describe("feedbackService.saveIssueVote", () => {
     const targetCommentId = randomUUID();
     const earlierCommentId = randomUUID();
     const laterCommentId = randomUUID();
-    const runId = randomUUID();
+    // Fixed id: random UUIDs can contain digit runs that match phone redaction in feedback bundles.
+    const runId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
     const instructionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-feedback-instructions-"));
     tempDirs.push(instructionsDir);
     const instructionsPath = path.join(instructionsDir, "AGENTS.md");

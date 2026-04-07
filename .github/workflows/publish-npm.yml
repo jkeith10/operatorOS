@@ -19,6 +19,7 @@ concurrency:
 jobs:
   publish-shared:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +35,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Typecheck @operatoros/shared
+        run: pnpm --filter @operatoros/shared typecheck
 
       - name: Build @operatoros/shared
         run: pnpm --filter @operatoros/shared build

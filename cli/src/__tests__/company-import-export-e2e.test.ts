@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -276,6 +276,12 @@ describeCompanyImportExportE2e("paperclipai company import/export e2e", () => {
     writeTestConfig(configPath, tempRoot, port, tempDb.connectionString);
     ensureTestSecretsMasterKey(tempRoot);
     apiBase = `http://127.0.0.1:${port}`;
+
+    execSync("pnpm --filter @operatoros/db build", {
+      cwd: companyE2eRepoRoot,
+      stdio: "pipe",
+      env: { ...process.env, CI: "true" },
+    });
 
     const serverPackageDir = path.join(companyE2eRepoRoot, "server");
     const output = { stdout: [] as string[], stderr: [] as string[] };

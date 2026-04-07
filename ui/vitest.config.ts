@@ -6,6 +6,7 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       lexical: path.resolve(__dirname, "./node_modules/lexical/Lexical.mjs"),
+      "@operatoros/shared": path.resolve(__dirname, "../packages/shared/src/index.ts"),
     },
   },
   test: {
