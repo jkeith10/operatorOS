@@ -1,6 +1,8 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PaperclipActor } from "../types/actor.js";
+import { withTestActor } from "./helpers/with-test-actor.js";
 
 const mockAccessService = vi.hoisted(() => ({
   isInstanceAdmin: vi.fn(),
@@ -34,13 +36,10 @@ vi.mock("../services/index.js", () => ({
   deduplicateAgentName: vi.fn((name: string) => name),
 }));
 
-function createApp(actor: any) {
+function createApp(actor: PaperclipActor) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    req.actor = actor;
-    next();
-  });
+  app.use(withTestActor(actor));
   return import("../routes/access.js").then(({ accessRoutes }) =>
     import("../middleware/index.js").then(({ errorHandler }) => {
       app.use(

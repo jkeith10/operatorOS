@@ -116,6 +116,8 @@ Notes:
 Run this full check before claiming done:
 
 ```sh
+pnpm check:tokens
+pnpm lint
 pnpm -r typecheck
 pnpm test:run
 pnpm build

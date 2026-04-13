@@ -10,9 +10,10 @@ function createApp(
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.actor = actorType === "board"
-      ? { type: "board", userId: "board", source: boardSource }
-      : { type: "agent", agentId: "agent-1" };
+    req.actor =
+      actorType === "board"
+        ? { type: "board", userId: "board", source: boardSource }
+        : { type: "agent", agentId: "agent-1", companyId: "company-1", source: "agent_key" };
     next();
   });
   app.use(boardMutationGuard());

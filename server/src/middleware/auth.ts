@@ -1,13 +1,19 @@
 import { createHash } from "node:crypto";
-import type { Request, RequestHandler } from "express";
-import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@operatoros/db";
-import { agentApiKeys, agents, companyMemberships, instanceUserRoles } from "@operatoros/db";
-import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
+import {
+  agentApiKeys,
+  agents,
+  companyMemberships,
+  instanceUserRoles,
+} from "@operatoros/db";
 import type { DeploymentMode } from "@operatoros/shared";
+import { and, eq, isNull } from "drizzle-orm";
+import type { Request, RequestHandler } from "express";
+import { verifyLocalAgentJwt } from "../agent-auth-jwt.js";
 import type { BetterAuthSessionResult } from "../auth/better-auth.js";
-import { logger } from "./logger.js";
 import { boardAuthService } from "../services/board-auth.js";
+import type { PaperclipActor } from "../types/actor.js";
+import { logger } from "./logger.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -18,13 +24,22 @@ interface ActorMiddlewareOptions {
   resolveSession?: (req: Request) => Promise<BetterAuthSessionResult | null>;
 }
 
-export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHandler {
+export function actorMiddleware(
+  db: Db,
+  opts: ActorMiddlewareOptions,
+): RequestHandler {
   const boardAuth = boardAuthService(db);
   return async (req, _res, next) => {
-    req.actor =
+    const initialActor: PaperclipActor =
       opts.deploymentMode === "local_trusted"
-        ? { type: "board", userId: "local-board", isInstanceAdmin: true, source: "local_implicit" }
+        ? {
+            type: "board",
+            userId: "local-board",
+            isInstanceAdmin: true,
+            source: "local_implicit",
+          }
         : { type: "none", source: "none" };
+    req.actor = initialActor;
 
     const runIdHeader = req.header("x-paperclip-run-id");
 
@@ -46,7 +61,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
             db
               .select({ id: instanceUserRoles.id })
               .from(instanceUserRoles)
-              .where(and(eq(instanceUserRoles.userId, userId), eq(instanceUserRoles.role, "instance_admin")))
+              .where(
+                and(
+                  eq(instanceUserRoles.userId, userId),
+                  eq(instanceUserRoles.role, "instance_admin"),
+                ),
+              )
               .then((rows) => rows[0] ?? null),
             db
               .select({ companyId: companyMemberships.companyId })
@@ -105,7 +125,12 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
     const key = await db
       .select()
       .from(agentApiKeys)
-      .where(and(eq(agentApiKeys.keyHash, tokenHash), isNull(agentApiKeys.revokedAt)))
+      .where(
+        and(
+          eq(agentApiKeys.keyHash, tokenHash),
+          isNull(agentApiKeys.revokedAt),
+        ),
+      )
       .then((rows) => rows[0] ?? null);
 
     if (!key) {
@@ -126,7 +151,10 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
         return;
       }
 
-      if (agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
+      if (
+        agentRecord.status === "terminated" ||
+        agentRecord.status === "pending_approval"
+      ) {
         next();
         return;
       }
@@ -154,7 +182,11 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
       .where(eq(agents.id, key.agentId))
       .then((rows) => rows[0] ?? null);
 
-    if (!agentRecord || agentRecord.status === "terminated" || agentRecord.status === "pending_approval") {
+    if (
+      !agentRecord ||
+      agentRecord.status === "terminated" ||
+      agentRecord.status === "pending_approval"
+    ) {
       next();
       return;
     }
@@ -172,6 +204,6 @@ export function actorMiddleware(db: Db, opts: ActorMiddlewareOptions): RequestHa
   };
 }
 
-export function requireBoard(req: Express.Request) {
+export function requireBoard(req: Request): boolean {
   return req.actor.type === "board";
 }

@@ -3,6 +3,8 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { costRoutes } from "../routes/costs.js";
 import { errorHandler } from "../middleware/index.js";
+import type { PaperclipActor } from "../types/actor.js";
+import { withTestActor } from "./helpers/with-test-actor.js";
 
 function makeDb(overrides: Record<string, unknown> = {}) {
   const selectChain = {
@@ -90,22 +92,16 @@ vi.mock("../services/quota-windows.js", () => ({
 function createApp() {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    req.actor = { type: "board", userId: "board-user", source: "local_implicit" };
-    next();
-  });
+  app.use(withTestActor({ type: "board", userId: "board-user", source: "local_implicit" }));
   app.use("/api", costRoutes(makeDb() as any));
   app.use(errorHandler);
   return app;
 }
 
-function createAppWithActor(actor: any) {
+function createAppWithActor(actor: PaperclipActor) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    req.actor = actor;
-    next();
-  });
+  app.use(withTestActor(actor));
   app.use("/api", costRoutes(makeDb() as any));
   app.use(errorHandler);
   return app;

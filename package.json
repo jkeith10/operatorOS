@@ -12,6 +12,8 @@
     "dev:ui": "pnpm --filter @operatoros/ui dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
     "test": "vitest",
     "test:run": "vitest run",
     "db:generate": "pnpm --filter @operatoros/db generate",
@@ -39,6 +41,7 @@
     "metrics:paperclip-commits": "tsx scripts/paperclip-commit-metrics.ts"
   },
   "devDependencies": {
+    "@biomejs/biome": "1.9.4",
     "@playwright/test": "^1.58.2",
     "cross-env": "^10.1.0",
     "esbuild": "^0.27.3",

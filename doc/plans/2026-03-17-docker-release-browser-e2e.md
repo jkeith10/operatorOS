@@ -1,5 +1,13 @@
 # Docker Release Browser E2E Plan
 
+## Implementation status (OperatorOS fork, 2026-04-13)
+
+Shipped in this repository:
+
+- **Harness:** `scripts/docker-onboard-smoke.sh` supports `SMOKE_DETACH=true` and `SMOKE_METADATA_FILE` (machine-readable env-style metadata for Playwright).
+- **Browser suite:** `tests/release-smoke/playwright.config.ts` and `tests/release-smoke/docker-auth-onboarding.spec.ts` (authenticated login + onboarding + API/run assertions). CEO `adapterType` allows deterministic `process` for token-free Docker smoke.
+- **CI:** Source-tree onboarding E2E runs on every PR/push in [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) (`pnpm test:e2e`). Published-package smoke is **manual** via [`.github/workflows/release-smoke.yml`](../../.github/workflows/release-smoke.yml) (`workflow_dispatch`, Docker + Playwright). Wiring `release-smoke.yml` into a future `release.yml` post-publish hook remains optional (Phase B/C in this document).
+
 ## Context
 
 Today release smoke testing for published Paperclip packages is manual and shell-driven:
@@ -75,12 +83,12 @@ That means the hard bootstrap problem is mostly solved already. The main gap is 
 
 ### Existing CI shape
 
-The repo already has:
+The repo has:
 
-- `.github/workflows/e2e.yml` for manual Playwright runs against local source
-- `.github/workflows/release.yml` for canary publish on `master` and manual stable promotion
+- `.github/workflows/ci.yml` — typecheck, unit tests, build, `pnpm check:tokens`, `pnpm lint`, and Playwright source-tree E2E (`pnpm test:e2e`)
+- `.github/workflows/release-smoke.yml` — optional `workflow_dispatch` published-package smoke (Docker + `pnpm test:release-smoke`)
 
-So the right move is to extend the current test/release system, not create a parallel one.
+Upstream Paperclip may additionally use `release.yml` for canary/stable npm; this fork aligns the integration branch with **`main`** in CI and contributor docs.
 
 ## Product Decision
 
