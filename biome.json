@@ -1,0 +1,57 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "include": [
+      "server/src/adapters/utils.ts",
+      "server/src/app.ts",
+      "server/src/middleware/auth.ts",
+      "server/src/routes/access.ts",
+      "server/src/routes/agents.ts",
+      "server/src/routes/authz.ts",
+      "server/src/routes/companies.ts",
+      "server/src/routes/company-skills.ts",
+      "server/src/routes/issues.ts",
+      "server/src/types/**/*.ts",
+      "server/src/types/**/*.d.ts",
+      "server/src/__tests__/helpers/with-test-actor.ts",
+      "server/src/__tests__/activity-routes.test.ts",
+      "server/src/__tests__/agent-instructions-routes.test.ts",
+      "server/src/__tests__/agent-skills-routes.test.ts",
+      "server/src/__tests__/approval-routes-idempotency.test.ts",
+      "server/src/__tests__/cli-auth-routes.test.ts",
+      "server/src/__tests__/companies-route-path-guard.test.ts",
+      "server/src/__tests__/costs-service.test.ts",
+      "server/src/__tests__/issue-comment-reopen-routes.test.ts",
+      "server/src/__tests__/issue-document-restore-routes.test.ts",
+      "server/src/__tests__/issues-goal-context-routes.test.ts",
+      "packages/db/src/backup-lib.test.ts",
+      "packages/db/src/test-embedded-postgres.ts",
+      "packages/db/src/test-utils.ts"
+    ],
+    "ignore": ["**/dist/**", "**/node_modules/**"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space"
+  },
+  "organizeImports": {
+    "enabled": true
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "off"
+      },
+      "style": {
+        "useImportType": "off"
+      }
+    }
+  }
+}

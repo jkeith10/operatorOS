@@ -12,6 +12,7 @@ import type {
   CompanyPortabilityPreviewResult,
   CompanyPortabilityImportResult,
 } from "@operatoros/shared";
+import { AGENT_ADAPTER_TYPES } from "@operatoros/shared";
 import { getTelemetryClient, trackCompanyImported } from "../../telemetry.js";
 import { ApiRequestError } from "../../client/http.js";
 import { openUrl } from "../../client/board-auth.js";
@@ -371,8 +372,11 @@ export function buildSelectedFilesFromImportSelection(
 
 export function buildDefaultImportAdapterOverrides(
   preview: Pick<CompanyPortabilityPreviewResult, "manifest" | "selectedAgentSlugs">,
+  opts: { adapterTypeForProcessAgents?: string } = {},
 ): Record<string, { adapterType: string }> | undefined {
   const selectedAgentSlugs = new Set(preview.selectedAgentSlugs);
+  const adapterTypeForProcessAgents = opts.adapterTypeForProcessAgents ?? "claude_local";
+  if (adapterTypeForProcessAgents === "process") return undefined;
   const overrides = Object.fromEntries(
     preview.manifest.agents
       .filter((agent) => selectedAgentSlugs.size === 0 || selectedAgentSlugs.has(agent.slug))
@@ -380,8 +384,7 @@ export function buildDefaultImportAdapterOverrides(
       .map((agent) => [
         agent.slug,
         {
-          // TODO: replace this temporary claude_local fallback with adapter selection in the import TUI.
-          adapterType: "claude_local",
+          adapterType: adapterTypeForProcessAgents,
         },
       ]),
   );
@@ -489,6 +492,34 @@ async function promptForImportSelection(preview: CompanyPortabilityPreviewResult
 
     state[group] = new Set(selection);
   }
+}
+
+async function promptForProcessAgentAdapterType(preview: CompanyPortabilityPreviewResult): Promise<string> {
+  const selectedAgentSlugs = new Set(preview.selectedAgentSlugs);
+  const processAgents = preview.manifest.agents
+    .filter((agent) => selectedAgentSlugs.size === 0 || selectedAgentSlugs.has(agent.slug))
+    .filter((agent) => agent.adapterType === "process");
+
+  if (processAgents.length === 0) return "process";
+
+  const adapterType = await p.select<string>({
+    message: `Imported ${processAgents.length} agent${processAgents.length === 1 ? "" : "s"} use the process adapter in the package. Choose what adapter to use after import`,
+    options: [
+      { value: "process", label: "Keep process", hint: "No adapter override" },
+      ...AGENT_ADAPTER_TYPES.filter((value) => value !== "process").map((value) => ({
+        value,
+        label: value.replace(/_/g, "-"),
+      })),
+    ],
+    initialValue: "claude_local",
+  });
+
+  if (p.isCancel(adapterType)) {
+    p.cancel("Import cancelled.");
+    process.exit(0);
+  }
+
+  return adapterType;
 }
 
 function summarizeInclude(include: CompanyPortabilityInclude): string {
@@ -1381,7 +1412,9 @@ export function registerCompanyCommands(program: Command): void {
           if (!preview) {
             throw new Error("Import preview returned no data.");
           }
-          const adapterOverrides = buildDefaultImportAdapterOverrides(preview);
+          const adapterTypeForProcessAgents =
+            interactiveView && !opts.yes ? await promptForProcessAgentAdapterType(preview) : undefined;
+          const adapterOverrides = buildDefaultImportAdapterOverrides(preview, { adapterTypeForProcessAgents });
           const adapterMessages = buildDefaultImportAdapterMessages(adapterOverrides);
 
           if (opts.dryRun) {

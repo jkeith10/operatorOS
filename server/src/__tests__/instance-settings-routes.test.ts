@@ -3,6 +3,8 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { errorHandler } from "../middleware/index.js";
 import { instanceSettingsRoutes } from "../routes/instance-settings.js";
+import type { PaperclipActor } from "../types/actor.js";
+import { withTestActor } from "./helpers/with-test-actor.js";
 
 const mockInstanceSettingsService = vi.hoisted(() => ({
   getGeneral: vi.fn(),
@@ -18,13 +20,10 @@ vi.mock("../services/index.js", () => ({
   logActivity: mockLogActivity,
 }));
 
-function createApp(actor: any) {
+function createApp(actor: PaperclipActor) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    req.actor = actor;
-    next();
-  });
+  app.use(withTestActor(actor));
   app.use("/api", instanceSettingsRoutes({} as any));
   app.use(errorHandler);
   return app;

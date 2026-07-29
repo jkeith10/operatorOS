@@ -40,11 +40,23 @@ const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 
 const companyE2eRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const companyE2eServerDist = path.join(companyE2eRepoRoot, "server", "dist", "index.js");
+const companyE2eCliEntry = path.join(companyE2eRepoRoot, "cli", "src", "index.ts");
 const companyE2eHasServerDist = existsSync(companyE2eServerDist);
+
+function resolveTsxCli(): string | null {
+  const candidates = [
+    path.join(companyE2eRepoRoot, "cli", "node_modules", "tsx", "dist", "cli.mjs"),
+    path.join(companyE2eRepoRoot, "server", "node_modules", "tsx", "dist", "cli.mjs"),
+    path.join(companyE2eRepoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+const companyE2eTsxCli = resolveTsxCli();
 
 /** Needs embedded Postgres, and a compiled server (avoid `tsx` loading `server/src` from drvfs — times out). */
 const describeCompanyImportExportE2e =
-  embeddedPostgresSupport.supported && companyE2eHasServerDist ? describe : describe.skip;
+  embeddedPostgresSupport.supported && companyE2eHasServerDist && companyE2eTsxCli ? describe : describe.skip;
 
 if (!embeddedPostgresSupport.supported) {
   console.warn(
@@ -210,10 +222,17 @@ async function api<T>(baseUrl: string, pathname: string, init?: RequestInit): Pr
   return text ? JSON.parse(text) as T : (null as T);
 }
 
+if (!companyE2eTsxCli) {
+  console.warn("Skipping company import/export e2e: tsx CLI not found in workspace node_modules.");
+}
+
 async function runCliJson<T>(args: string[], opts: { apiBase: string; configPath: string }) {
+  if (!companyE2eTsxCli) {
+    throw new Error("tsx CLI is required for company import/export e2e tests.");
+  }
   const result = await execFileAsync(
-    "pnpm",
-    ["--silent", "paperclipai", ...args, "--api-base", opts.apiBase, "--config", opts.configPath, "--json"],
+    process.execPath,
+    [companyE2eTsxCli, companyE2eCliEntry, ...args, "--api-base", opts.apiBase, "--config", opts.configPath, "--json"],
     {
       cwd: companyE2eRepoRoot,
       env: createCliEnv(),
@@ -286,7 +305,10 @@ describeCompanyImportExportE2e("paperclipai company import/export e2e", () => {
     const serverPackageDir = path.join(companyE2eRepoRoot, "server");
     const output = { stdout: [] as string[], stderr: [] as string[] };
     const env = createServerEnv(configPath, port, tempDb.connectionString);
-    const child = spawn(process.execPath, [companyE2eServerDist], {
+    const child = spawn(
+      process.execPath,
+      companyE2eTsxCli ? [companyE2eTsxCli, companyE2eServerDist] : [companyE2eServerDist],
+      {
       cwd: serverPackageDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],

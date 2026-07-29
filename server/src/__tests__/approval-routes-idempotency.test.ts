@@ -1,8 +1,9 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { approvalRoutes } from "../routes/approvals.js";
 import { errorHandler } from "../middleware/index.js";
+import { approvalRoutes } from "../routes/approvals.js";
+import { makeBoardActor, withTestActor } from "./helpers/with-test-actor.js";
 
 const mockApprovalService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -42,16 +43,16 @@ vi.mock("../services/index.js", () => ({
 function createApp() {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "user-1",
-      companyIds: ["company-1"],
-      source: "session",
-      isInstanceAdmin: false,
-    };
-    next();
-  });
+  app.use(
+    withTestActor(
+      makeBoardActor({
+        userId: "user-1",
+        companyIds: ["company-1"],
+        source: "session",
+        isInstanceAdmin: false,
+      }),
+    ),
+  );
   app.use("/api", approvalRoutes({} as any));
   app.use(errorHandler);
   return app;
@@ -61,7 +62,9 @@ describe("approval routes idempotent retries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHeartbeatService.wakeup.mockResolvedValue({ id: "wake-1" });
-    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([{ id: "issue-1" }]);
+    mockIssueApprovalService.listIssuesForApproval.mockResolvedValue([
+      { id: "issue-1" },
+    ]);
     mockLogActivity.mockResolvedValue(undefined);
   });
 
@@ -83,7 +86,9 @@ describe("approval routes idempotent retries", () => {
       .send({});
 
     expect(res.status).toBe(200);
-    expect(mockIssueApprovalService.listIssuesForApproval).not.toHaveBeenCalled();
+    expect(
+      mockIssueApprovalService.listIssuesForApproval,
+    ).not.toHaveBeenCalled();
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalled();
   });

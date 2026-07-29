@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { companies, invites } from "@operatoros/db";
 import { accessRoutes } from "../routes/access.js";
 import { errorHandler } from "../middleware/index.js";
+import type { PaperclipActor } from "../types/actor.js";
+import { withTestActor } from "./helpers/with-test-actor.js";
 
 const mockAccessService = vi.hoisted(() => ({
   hasPermission: vi.fn(),
@@ -84,13 +86,10 @@ function createDbStub() {
   };
 }
 
-function createApp(actor: Record<string, unknown>, db: Record<string, unknown>) {
+function createApp(actor: PaperclipActor, db: Record<string, unknown>) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = actor;
-    next();
-  });
+  app.use(withTestActor(actor));
   app.use(
     "/api",
     accessRoutes(db as any, {

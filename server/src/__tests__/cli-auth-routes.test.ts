@@ -2,7 +2,11 @@ import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PaperclipActor } from "../types/actor.js";
-import { withTestActor } from "./helpers/with-test-actor.js";
+import {
+  makeBoardActor,
+  makeNoneActor,
+  withTestActor,
+} from "./helpers/with-test-actor.js";
 
 const mockAccessService = vi.hoisted(() => ({
   isInstanceAdmin: vi.fn(),
@@ -53,13 +57,11 @@ function createApp(actor: PaperclipActor) {
       );
       app.use(errorHandler);
       return app;
-    })
+    }),
   );
 }
 
-describe(
-  "cli auth routes",
-  () => {
+describe("cli auth routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -74,14 +76,12 @@ describe(
       pendingBoardToken: "pcp_board_token",
     });
 
-    const app = await createApp({ type: "none", source: "none" });
-    const res = await request(app)
-      .post("/api/cli-auth/challenges")
-      .send({
-        command: "paperclipai company import",
-        clientName: "paperclipai cli",
-        requestedAccess: "board",
-      });
+    const app = await createApp(makeNoneActor());
+    const res = await request(app).post("/api/cli-auth/challenges").send({
+      command: "paperclipai company import",
+      clientName: "paperclipai cli",
+      requestedAccess: "board",
+    });
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
@@ -92,7 +92,9 @@ describe(
       pollPath: "/cli-auth/challenges/challenge-1",
       expiresAt: "2026-03-23T13:00:00.000Z",
     });
-    expect(res.body.approvalUrl).toContain("/cli-auth/challenge-1?token=pcp_cli_auth_secret");
+    expect(res.body.approvalUrl).toContain(
+      "/cli-auth/challenge-1?token=pcp_cli_auth_secret",
+    );
   });
 
   it("marks challenge status as requiring sign-in for anonymous viewers", async () => {
@@ -110,8 +112,10 @@ describe(
       approvedByUser: null,
     });
 
-    const app = await createApp({ type: "none", source: "none" });
-    const res = await request(app).get("/api/cli-auth/challenges/challenge-1?token=pcp_cli_auth_secret");
+    const app = await createApp(makeNoneActor());
+    const res = await request(app).get(
+      "/api/cli-auth/challenges/challenge-1?token=pcp_cli_auth_secret",
+    );
 
     expect(res.status).toBe(200);
     expect(res.body.requiresSignIn).toBe(true);
@@ -134,15 +138,18 @@ describe(
       companyIds: ["company-1"],
       isInstanceAdmin: false,
     });
-    mockBoardAuthService.resolveBoardActivityCompanyIds.mockResolvedValue(["company-1"]);
+    mockBoardAuthService.resolveBoardActivityCompanyIds.mockResolvedValue([
+      "company-1",
+    ]);
 
-    const app = await createApp({
-      type: "board",
-      userId: "user-1",
-      source: "session",
-      isInstanceAdmin: false,
-      companyIds: ["company-1"],
-    });
+    const app = await createApp(
+      makeBoardActor({
+        userId: "user-1",
+        source: "session",
+        isInstanceAdmin: false,
+        companyIds: ["company-1"],
+      }),
+    );
     const res = await request(app)
       .post("/api/cli-auth/challenges/challenge-1/approve")
       .send({ token: "pcp_cli_auth_secret" });
@@ -176,21 +183,27 @@ describe(
         expiresAt: new Date("2026-03-23T13:00:00.000Z"),
       },
     });
-    mockBoardAuthService.resolveBoardActivityCompanyIds.mockResolvedValue(["company-a", "company-b"]);
+    mockBoardAuthService.resolveBoardActivityCompanyIds.mockResolvedValue([
+      "company-a",
+      "company-b",
+    ]);
 
-    const app = await createApp({
-      type: "board",
-      userId: "admin-1",
-      source: "session",
-      isInstanceAdmin: true,
-      companyIds: [],
-    });
+    const app = await createApp(
+      makeBoardActor({
+        userId: "admin-1",
+        source: "session",
+        isInstanceAdmin: true,
+        companyIds: [],
+      }),
+    );
     const res = await request(app)
       .post("/api/cli-auth/challenges/challenge-2/approve")
       .send({ token: "pcp_cli_auth_secret" });
 
     expect(res.status).toBe(200);
-    expect(mockBoardAuthService.resolveBoardActivityCompanyIds).toHaveBeenCalledWith({
+    expect(
+      mockBoardAuthService.resolveBoardActivityCompanyIds,
+    ).toHaveBeenCalledWith({
       userId: "admin-1",
       requestedCompanyId: null,
       boardApiKeyId: "board-key-2",
@@ -203,20 +216,27 @@ describe(
       id: "board-key-3",
       userId: "admin-2",
     });
-    mockBoardAuthService.resolveBoardActivityCompanyIds.mockResolvedValue(["company-z"]);
+    mockBoardAuthService.resolveBoardActivityCompanyIds.mockResolvedValue([
+      "company-z",
+    ]);
 
-    const app = await createApp({
-      type: "board",
-      userId: "admin-2",
-      keyId: "board-key-3",
-      source: "board_key",
-      isInstanceAdmin: true,
-      companyIds: [],
-    });
-    const res = await request(app).post("/api/cli-auth/revoke-current").send({});
+    const app = await createApp(
+      makeBoardActor({
+        userId: "admin-2",
+        keyId: "board-key-3",
+        source: "board_key",
+        isInstanceAdmin: true,
+        companyIds: [],
+      }),
+    );
+    const res = await request(app)
+      .post("/api/cli-auth/revoke-current")
+      .send({});
 
     expect(res.status).toBe(200);
-    expect(mockBoardAuthService.resolveBoardActivityCompanyIds).toHaveBeenCalledWith({
+    expect(
+      mockBoardAuthService.resolveBoardActivityCompanyIds,
+    ).toHaveBeenCalledWith({
       userId: "admin-2",
       boardApiKeyId: "board-key-3",
     });
@@ -228,6 +248,4 @@ describe(
       }),
     );
   });
-  },
-  30_000,
-);
+}, 30_000);

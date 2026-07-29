@@ -3,6 +3,8 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { routineRoutes } from "../routes/routines.js";
 import { errorHandler } from "../middleware/index.js";
+import type { PaperclipActor } from "../types/actor.js";
+import { withTestActor } from "./helpers/with-test-actor.js";
 
 const companyId = "22222222-2222-4222-8222-222222222222";
 const agentId = "11111111-1111-4111-8111-111111111111";
@@ -89,13 +91,10 @@ vi.mock("../services/index.js", () => ({
   routineService: () => mockRoutineService,
 }));
 
-function createApp(actor: Record<string, unknown>) {
+function createApp(actor: PaperclipActor) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = actor;
-    next();
-  });
+  app.use(withTestActor(actor));
   app.use("/api", routineRoutes({} as any));
   app.use(errorHandler);
   return app;

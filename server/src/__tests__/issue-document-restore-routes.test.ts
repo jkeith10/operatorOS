@@ -1,8 +1,9 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { issueRoutes } from "../routes/issues.js";
 import { errorHandler } from "../middleware/index.js";
+import { issueRoutes } from "../routes/issues.js";
+import { makeBoardActor, withTestActor } from "./helpers/with-test-actor.js";
 
 const issueId = "11111111-1111-4111-8111-111111111111";
 const companyId = "22222222-2222-4222-8222-222222222222";
@@ -40,7 +41,9 @@ vi.mock("../services/index.js", () => ({
   }),
   instanceSettingsService: () => ({
     getExperimental: vi.fn(async () => ({})),
-    getGeneral: vi.fn(async () => ({ feedbackDataSharingPreference: "prompt" })),
+    getGeneral: vi.fn(async () => ({
+      feedbackDataSharingPreference: "prompt",
+    })),
   }),
   issueApprovalService: () => ({}),
   issueService: () => mockIssueService,
@@ -55,16 +58,16 @@ vi.mock("../services/index.js", () => ({
 function createApp() {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "board-user",
-      companyIds: [companyId],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
-    next();
-  });
+  app.use(
+    withTestActor(
+      makeBoardActor({
+        userId: "board-user",
+        companyIds: [companyId],
+        source: "local_implicit",
+        isInstanceAdmin: true,
+      }),
+    ),
+  );
   app.use("/api", issueRoutes({} as any, {} as any));
   app.use(errorHandler);
   return app;
@@ -121,10 +124,14 @@ describe("issue document revision routes", () => {
   });
 
   it("returns revision snapshots including title and format", async () => {
-    const res = await request(createApp()).get(`/api/issues/${issueId}/documents/plan/revisions`);
+    const res = await request(createApp()).get(
+      `/api/issues/${issueId}/documents/plan/revisions`,
+    );
 
     expect(res.status).toBe(200);
-    expect(mockDocumentsService.listIssueDocumentRevisions).toHaveBeenCalledWith(issueId, "plan");
+    expect(
+      mockDocumentsService.listIssueDocumentRevisions,
+    ).toHaveBeenCalledWith(issueId, "plan");
     expect(res.body).toEqual([
       expect.objectContaining({
         revisionNumber: 2,
@@ -137,11 +144,15 @@ describe("issue document revision routes", () => {
 
   it("restores a revision through the append-only route and logs the action", async () => {
     const res = await request(createApp())
-      .post(`/api/issues/${issueId}/documents/plan/revisions/revision-1/restore`)
+      .post(
+        `/api/issues/${issueId}/documents/plan/revisions/revision-1/restore`,
+      )
       .send({});
 
     expect(res.status).toBe(200);
-    expect(mockDocumentsService.restoreIssueDocumentRevision).toHaveBeenCalledWith({
+    expect(
+      mockDocumentsService.restoreIssueDocumentRevision,
+    ).toHaveBeenCalledWith({
       issueId,
       key: "plan",
       revisionId: "revision-1",
@@ -160,19 +171,25 @@ describe("issue document revision routes", () => {
         }),
       }),
     );
-    expect(res.body).toEqual(expect.objectContaining({
-      key: "plan",
-      title: "Plan v1",
-      latestRevisionNumber: 3,
-    }));
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        key: "plan",
+        title: "Plan v1",
+        latestRevisionNumber: 3,
+      }),
+    );
   });
 
   it("rejects invalid document keys before attempting restore", async () => {
     const res = await request(createApp())
-      .post(`/api/issues/${issueId}/documents/INVALID KEY/revisions/revision-1/restore`)
+      .post(
+        `/api/issues/${issueId}/documents/INVALID KEY/revisions/revision-1/restore`,
+      )
       .send({});
 
     expect(res.status).toBe(400);
-    expect(mockDocumentsService.restoreIssueDocumentRevision).not.toHaveBeenCalled();
+    expect(
+      mockDocumentsService.restoreIssueDocumentRevision,
+    ).not.toHaveBeenCalled();
   });
 });

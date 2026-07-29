@@ -1,23 +1,30 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
 import postgres from "postgres";
-import { createBufferedTextFileWriter, runDatabaseBackup, runDatabaseRestore } from "./backup-lib.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  createBufferedTextFileWriter,
+  runDatabaseBackup,
+  runDatabaseRestore,
+} from "./backup-lib.js";
 import { ensurePostgresDatabase } from "./client.js";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./test-embedded-postgres.js";
+import { rmRfWithRetries } from "./test-utils.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
-const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
+const describeEmbeddedPostgres = embeddedPostgresSupport.supported
+  ? describe
+  : describe.skip;
 
 function createTempDir(prefix: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   cleanups.push(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    return rmRfWithRetries(dir).catch(() => {});
   });
   return dir;
 }
@@ -28,7 +35,10 @@ async function createTempDatabase(): Promise<string> {
   return db.connectionString;
 }
 
-async function createSiblingDatabase(connectionString: string, databaseName: string): Promise<string> {
+async function createSiblingDatabase(
+  connectionString: string,
+  databaseName: string,
+): Promise<string> {
   const adminUrl = new URL(connectionString);
   adminUrl.pathname = "/postgres";
   await ensurePostgresDatabase(adminUrl.toString(), databaseName);
@@ -74,23 +84,27 @@ describe("createBufferedTextFileWriter", () => {
 });
 
 describeEmbeddedPostgres("runDatabaseBackup", () => {
-  it(
-    "backs up and restores large table payloads without materializing one giant string",
-    async () => {
-      const sourceConnectionString = await createTempDatabase();
-      const restoreConnectionString = await createSiblingDatabase(
-        sourceConnectionString,
-        "paperclip_restore_target",
-      );
-      const backupDir = createTempDir("paperclip-db-backup-output-");
-      const sourceSql = postgres(sourceConnectionString, { max: 1, onnotice: () => {} });
-      const restoreSql = postgres(restoreConnectionString, { max: 1, onnotice: () => {} });
+  it("backs up and restores large table payloads without materializing one giant string", async () => {
+    const sourceConnectionString = await createTempDatabase();
+    const restoreConnectionString = await createSiblingDatabase(
+      sourceConnectionString,
+      "paperclip_restore_target",
+    );
+    const backupDir = createTempDir("paperclip-db-backup-output-");
+    const sourceSql = postgres(sourceConnectionString, {
+      max: 1,
+      onnotice: () => {},
+    });
+    const restoreSql = postgres(restoreConnectionString, {
+      max: 1,
+      onnotice: () => {},
+    });
 
-      try {
-        await sourceSql.unsafe(`
+    try {
+      await sourceSql.unsafe(`
           CREATE TYPE "public"."backup_test_state" AS ENUM ('pending', 'done');
         `);
-        await sourceSql.unsafe(`
+      await sourceSql.unsafe(`
           CREATE TABLE "public"."backup_test_records" (
             "id" serial PRIMARY KEY,
             "title" text NOT NULL,
@@ -101,10 +115,10 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
           );
         `);
 
-        const payload = "x".repeat(8192);
-        for (let index = 0; index < 160; index += 1) {
-          const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index));
-          await sourceSql`
+      const payload = "x".repeat(8192);
+      for (let index = 0; index < 160; index += 1) {
+        const createdAt = new Date(Date.UTC(2026, 0, 1, 0, 0, index));
+        await sourceSql`
             INSERT INTO "public"."backup_test_records" (
               "title",
               "payload",
@@ -120,60 +134,60 @@ describeEmbeddedPostgres("runDatabaseBackup", () => {
               ${createdAt}
             )
           `;
-        }
+      }
 
-        const result = await runDatabaseBackup({
-          connectionString: sourceConnectionString,
-          backupDir,
-          retentionDays: 7,
-          filenamePrefix: "paperclip-test",
-        });
+      const result = await runDatabaseBackup({
+        connectionString: sourceConnectionString,
+        backupDir,
+        retentionDays: 7,
+        filenamePrefix: "paperclip-test",
+      });
 
-        expect(result.backupFile).toMatch(/paperclip-test-.*\.sql$/);
-        expect(result.sizeBytes).toBeGreaterThan(1024 * 1024);
-        expect(fs.existsSync(result.backupFile)).toBe(true);
+      expect(result.backupFile).toMatch(/paperclip-test-.*\.sql$/);
+      expect(result.sizeBytes).toBeGreaterThan(1024 * 1024);
+      expect(fs.existsSync(result.backupFile)).toBe(true);
 
-        await runDatabaseRestore({
-          connectionString: restoreConnectionString,
-          backupFile: result.backupFile,
-        });
+      await runDatabaseRestore({
+        connectionString: restoreConnectionString,
+        backupFile: result.backupFile,
+      });
 
-        const counts = await restoreSql.unsafe<{ count: number }[]>(`
+      const counts = await restoreSql.unsafe<{ count: number }[]>(`
           SELECT count(*)::int AS count
           FROM "public"."backup_test_records"
         `);
-        expect(counts[0]?.count).toBe(160);
+      expect(counts[0]?.count).toBe(160);
 
-        const sampleRows = await restoreSql.unsafe<{
+      const sampleRows = await restoreSql.unsafe<
+        {
           title: string;
           payload: string;
           state: string;
           metadata: { index: number; even: boolean };
-        }[]>(`
+        }[]
+      >(`
           SELECT "title", "payload", "state"::text AS "state", "metadata"
           FROM "public"."backup_test_records"
           WHERE "title" IN ('row-0', 'row-159')
           ORDER BY "title"
         `);
-        expect(sampleRows).toEqual([
-          {
-            title: "row-0",
-            payload,
-            state: "pending",
-            metadata: { index: 0, even: true },
-          },
-          {
-            title: "row-159",
-            payload,
-            state: "done",
-            metadata: { index: 159, even: false },
-          },
-        ]);
-      } finally {
-        await sourceSql.end();
-        await restoreSql.end();
-      }
-    },
-    60_000,
-  );
+      expect(sampleRows).toEqual([
+        {
+          title: "row-0",
+          payload,
+          state: "pending",
+          metadata: { index: 0, even: true },
+        },
+        {
+          title: "row-159",
+          payload,
+          state: "done",
+          metadata: { index: 159, even: false },
+        },
+      ]);
+    } finally {
+      await sourceSql.end();
+      await restoreSql.end();
+    }
+  }, 60_000);
 });

@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { errorHandler } from "../middleware/index.js";
 import { activityRoutes } from "../routes/activity.js";
+import { makeBoardActor, withTestActor } from "./helpers/with-test-actor.js";
 
 const mockActivityService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -28,16 +29,16 @@ vi.mock("../services/index.js", () => ({
 function createApp() {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "user-1",
-      companyIds: ["company-1"],
-      source: "session",
-      isInstanceAdmin: false,
-    };
-    next();
-  });
+  app.use(
+    withTestActor(
+      makeBoardActor({
+        userId: "user-1",
+        companyIds: ["company-1"],
+        source: "session",
+        isInstanceAdmin: false,
+      }),
+    ),
+  );
   app.use("/api", activityRoutes({} as any));
   app.use(errorHandler);
   return app;
@@ -64,7 +65,10 @@ describe("activity routes", () => {
     expect(res.status).toBe(200);
     expect(mockIssueService.getByIdentifier).toHaveBeenCalledWith("PAP-475");
     expect(mockIssueService.getById).not.toHaveBeenCalled();
-    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith("company-1", "issue-uuid-1");
+    expect(mockActivityService.runsForIssue).toHaveBeenCalledWith(
+      "company-1",
+      "issue-uuid-1",
+    );
     expect(res.body).toEqual([{ runId: "run-1" }]);
   });
 });

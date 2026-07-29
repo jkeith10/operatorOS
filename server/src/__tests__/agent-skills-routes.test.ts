@@ -1,8 +1,9 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { agentRoutes } from "../routes/agents.js";
 import { errorHandler } from "../middleware/index.js";
+import { agentRoutes } from "../routes/agents.js";
+import { makeBoardActor, withTestActor } from "./helpers/with-test-actor.js";
 
 const mockAgentService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -47,7 +48,9 @@ const mockCompanySkillService = vi.hoisted(() => ({
 
 const mockSecretService = vi.hoisted(() => ({
   resolveAdapterConfigForRuntime: vi.fn(),
-  normalizeAdapterConfigForPersistence: vi.fn(async (_companyId: string, config: Record<string, unknown>) => config),
+  normalizeAdapterConfigForPersistence: vi.fn(
+    async (_companyId: string, config: Record<string, unknown>) => config,
+  ),
 }));
 
 const mockLogActivity = vi.hoisted(() => vi.fn());
@@ -96,16 +99,16 @@ function createDb(requireBoardApprovalForNewAgents = false) {
 function createApp(db: Record<string, unknown> = createDb()) {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "local-board",
-      companyIds: ["company-1"],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
-    next();
-  });
+  app.use(
+    withTestActor(
+      makeBoardActor({
+        userId: "local-board",
+        companyIds: ["company-1"],
+        source: "local_implicit",
+        isInstanceAdmin: true,
+      }),
+    ),
+  );
   app.use("/api", agentRoutes(db as any));
   app.use(errorHandler);
   return app;
@@ -136,7 +139,9 @@ describe("agent skill routes", () => {
       ambiguous: false,
       agent: makeAgent("claude_local"),
     });
-    mockSecretService.resolveAdapterConfigForRuntime.mockResolvedValue({ config: { env: {} } });
+    mockSecretService.resolveAdapterConfigForRuntime.mockResolvedValue({
+      config: { env: {} },
+    });
     mockCompanySkillService.listRuntimeSkillEntries.mockResolvedValue([
       {
         key: "paperclipai/paperclip/paperclip",
@@ -149,9 +154,7 @@ describe("agent skill routes", () => {
     mockCompanySkillService.resolveRequestedSkillKeys.mockImplementation(
       async (_companyId: string, requested: string[]) =>
         requested.map((value) =>
-          value === "paperclip"
-            ? "paperclipai/paperclip/paperclip"
-            : value,
+          value === "paperclip" ? "paperclipai/paperclip/paperclip" : value,
         ),
     );
     mockAdapter.listSkills.mockResolvedValue({
@@ -170,30 +173,40 @@ describe("agent skill routes", () => {
       entries: [],
       warnings: [],
     });
-    mockAgentService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
-      ...makeAgent("claude_local"),
-      adapterConfig: patch.adapterConfig ?? {},
-    }));
-    mockAgentService.create.mockImplementation(async (_companyId: string, input: Record<string, unknown>) => ({
-      ...makeAgent(String(input.adapterType ?? "claude_local")),
-      ...input,
-      adapterConfig: input.adapterConfig ?? {},
-      runtimeConfig: input.runtimeConfig ?? {},
-      budgetMonthlyCents: Number(input.budgetMonthlyCents ?? 0),
-      permissions: null,
-    }));
-    mockApprovalService.create.mockImplementation(async (_companyId: string, input: Record<string, unknown>) => ({
-      id: "approval-1",
-      companyId: "company-1",
-      type: "hire_agent",
-      status: "pending",
-      payload: input.payload ?? {},
-    }));
+    mockAgentService.update.mockImplementation(
+      async (_id: string, patch: Record<string, unknown>) => ({
+        ...makeAgent("claude_local"),
+        adapterConfig: patch.adapterConfig ?? {},
+      }),
+    );
+    mockAgentService.create.mockImplementation(
+      async (_companyId: string, input: Record<string, unknown>) => ({
+        ...makeAgent(String(input.adapterType ?? "claude_local")),
+        ...input,
+        adapterConfig: input.adapterConfig ?? {},
+        runtimeConfig: input.runtimeConfig ?? {},
+        budgetMonthlyCents: Number(input.budgetMonthlyCents ?? 0),
+        permissions: null,
+      }),
+    );
+    mockApprovalService.create.mockImplementation(
+      async (_companyId: string, input: Record<string, unknown>) => ({
+        id: "approval-1",
+        companyId: "company-1",
+        type: "hire_agent",
+        status: "pending",
+        payload: input.payload ?? {},
+      }),
+    );
     mockAgentInstructionsService.materializeManagedBundle.mockImplementation(
-      async (agent: Record<string, unknown>, files: Record<string, string>) => ({
+      async (
+        agent: Record<string, unknown>,
+        files: Record<string, string>,
+      ) => ({
         bundle: null,
         adapterConfig: {
-          ...((agent.adapterConfig as Record<string, unknown> | undefined) ?? {}),
+          ...((agent.adapterConfig as Record<string, unknown> | undefined) ??
+            {}),
           instructionsBundleMode: "managed",
           instructionsRootPath: `/tmp/${String(agent.id)}/instructions`,
           instructionsEntryFile: "AGENTS.md",
@@ -214,11 +227,14 @@ describe("agent skill routes", () => {
   it("skips runtime materialization when listing Claude skills", async () => {
     mockAgentService.getById.mockResolvedValue(makeAgent("claude_local"));
 
-    const res = await request(createApp())
-      .get("/api/agents/11111111-1111-4111-8111-111111111111/skills?companyId=company-1");
+    const res = await request(createApp()).get(
+      "/api/agents/11111111-1111-4111-8111-111111111111/skills?companyId=company-1",
+    );
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockCompanySkillService.listRuntimeSkillEntries).toHaveBeenCalledWith("company-1", {
+    expect(
+      mockCompanySkillService.listRuntimeSkillEntries,
+    ).toHaveBeenCalledWith("company-1", {
       materializeMissing: false,
     });
     expect(mockAdapter.listSkills).toHaveBeenCalledWith(
@@ -242,11 +258,14 @@ describe("agent skill routes", () => {
       warnings: [],
     });
 
-    const res = await request(createApp())
-      .get("/api/agents/11111111-1111-4111-8111-111111111111/skills?companyId=company-1");
+    const res = await request(createApp()).get(
+      "/api/agents/11111111-1111-4111-8111-111111111111/skills?companyId=company-1",
+    );
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockCompanySkillService.listRuntimeSkillEntries).toHaveBeenCalledWith("company-1", {
+    expect(
+      mockCompanySkillService.listRuntimeSkillEntries,
+    ).toHaveBeenCalledWith("company-1", {
       materializeMissing: false,
     });
   });
@@ -262,11 +281,14 @@ describe("agent skill routes", () => {
       warnings: [],
     });
 
-    const res = await request(createApp())
-      .get("/api/agents/11111111-1111-4111-8111-111111111111/skills?companyId=company-1");
+    const res = await request(createApp()).get(
+      "/api/agents/11111111-1111-4111-8111-111111111111/skills?companyId=company-1",
+    );
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockCompanySkillService.listRuntimeSkillEntries).toHaveBeenCalledWith("company-1", {
+    expect(
+      mockCompanySkillService.listRuntimeSkillEntries,
+    ).toHaveBeenCalledWith("company-1", {
       materializeMissing: true,
     });
   });
@@ -275,11 +297,15 @@ describe("agent skill routes", () => {
     mockAgentService.getById.mockResolvedValue(makeAgent("claude_local"));
 
     const res = await request(createApp())
-      .post("/api/agents/11111111-1111-4111-8111-111111111111/skills/sync?companyId=company-1")
+      .post(
+        "/api/agents/11111111-1111-4111-8111-111111111111/skills/sync?companyId=company-1",
+      )
       .send({ desiredSkills: ["paperclipai/paperclip/paperclip"] });
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockCompanySkillService.listRuntimeSkillEntries).toHaveBeenCalledWith("company-1", {
+    expect(
+      mockCompanySkillService.listRuntimeSkillEntries,
+    ).toHaveBeenCalledWith("company-1", {
       materializeMissing: false,
     });
     expect(mockAdapter.syncSkills).toHaveBeenCalled();
@@ -289,11 +315,15 @@ describe("agent skill routes", () => {
     mockAgentService.getById.mockResolvedValue(makeAgent("claude_local"));
 
     const res = await request(createApp())
-      .post("/api/agents/11111111-1111-4111-8111-111111111111/skills/sync?companyId=company-1")
+      .post(
+        "/api/agents/11111111-1111-4111-8111-111111111111/skills/sync?companyId=company-1",
+      )
       .send({ desiredSkills: ["paperclip"] });
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockCompanySkillService.resolveRequestedSkillKeys).toHaveBeenCalledWith("company-1", ["paperclip"]);
+    expect(
+      mockCompanySkillService.resolveRequestedSkillKeys,
+    ).toHaveBeenCalledWith("company-1", ["paperclip"]);
     expect(mockAgentService.update).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
@@ -319,7 +349,9 @@ describe("agent skill routes", () => {
       });
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    expect(mockCompanySkillService.resolveRequestedSkillKeys).toHaveBeenCalledWith("company-1", ["paperclip"]);
+    expect(
+      mockCompanySkillService.resolveRequestedSkillKeys,
+    ).toHaveBeenCalledWith("company-1", ["paperclip"]);
     expect(mockAgentService.create).toHaveBeenCalledWith(
       "company-1",
       expect.objectContaining({
@@ -345,7 +377,9 @@ describe("agent skill routes", () => {
       });
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+    expect(
+      mockAgentInstructionsService.materializeManagedBundle,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "11111111-1111-4111-8111-111111111111",
         adapterType: "claude_local",
@@ -359,7 +393,8 @@ describe("agent skill routes", () => {
         adapterConfig: expect.objectContaining({
           instructionsBundleMode: "managed",
           instructionsEntryFile: "AGENTS.md",
-          instructionsFilePath: "/tmp/11111111-1111-4111-8111-111111111111/instructions/AGENTS.md",
+          instructionsFilePath:
+            "/tmp/11111111-1111-4111-8111-111111111111/instructions/AGENTS.md",
         }),
       }),
     );
@@ -381,7 +416,9 @@ describe("agent skill routes", () => {
       });
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+    expect(
+      mockAgentInstructionsService.materializeManagedBundle,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "11111111-1111-4111-8111-111111111111",
         role: "ceo",
@@ -408,14 +445,18 @@ describe("agent skill routes", () => {
       });
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    expect(mockAgentInstructionsService.materializeManagedBundle).toHaveBeenCalledWith(
+    expect(
+      mockAgentInstructionsService.materializeManagedBundle,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "11111111-1111-4111-8111-111111111111",
         role: "engineer",
         adapterType: "claude_local",
       }),
       expect.objectContaining({
-        "AGENTS.md": expect.stringContaining("Keep the work moving until it's done."),
+        "AGENTS.md": expect.stringContaining(
+          "Keep the work moving until it's done.",
+        ),
       }),
       { entryFile: "AGENTS.md", replaceExisting: false },
     );
@@ -435,7 +476,9 @@ describe("agent skill routes", () => {
       });
 
     expect(res.status, JSON.stringify(res.body)).toBe(201);
-    expect(mockCompanySkillService.resolveRequestedSkillKeys).toHaveBeenCalledWith("company-1", ["paperclip"]);
+    expect(
+      mockCompanySkillService.resolveRequestedSkillKeys,
+    ).toHaveBeenCalledWith("company-1", ["paperclip"]);
     expect(mockApprovalService.create).toHaveBeenCalledWith(
       "company-1",
       expect.objectContaining({
@@ -469,7 +512,8 @@ describe("agent skill routes", () => {
           adapterConfig: expect.objectContaining({
             instructionsBundleMode: "managed",
             instructionsEntryFile: "AGENTS.md",
-            instructionsFilePath: "/tmp/11111111-1111-4111-8111-111111111111/instructions/AGENTS.md",
+            instructionsFilePath:
+              "/tmp/11111111-1111-4111-8111-111111111111/instructions/AGENTS.md",
           }),
         }),
       }),
@@ -477,6 +521,8 @@ describe("agent skill routes", () => {
     const approvalInput = mockApprovalService.create.mock.calls.at(-1)?.[1] as
       | { payload?: { adapterConfig?: Record<string, unknown> } }
       | undefined;
-    expect(approvalInput?.payload?.adapterConfig?.promptTemplate).toBeUndefined();
+    expect(
+      approvalInput?.payload?.adapterConfig?.promptTemplate,
+    ).toBeUndefined();
   });
 });

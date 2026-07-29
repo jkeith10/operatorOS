@@ -99,6 +99,24 @@ describe("feedbackService.saveIssueVote", () => {
   let dataDir = "";
   let tempDirs: string[] = [];
 
+  async function rmRfWithRetries(dir: string, opts: { retries?: number; delayMs?: number } = {}) {
+    const retries = opts.retries ?? (process.platform === "win32" ? 8 : 2);
+    const delayMs = opts.delayMs ?? (process.platform === "win32" ? 75 : 10);
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+        return;
+      } catch (err) {
+        const code = err instanceof Error ? (err as any).code : undefined;
+        if (attempt >= retries || (code !== "EPERM" && code !== "EBUSY" && code !== "ENOTEMPTY")) {
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
   beforeAll(async () => {
     const started = await startTempDatabase();
     db = createDb(started.connectionString);
@@ -122,7 +140,7 @@ describe("feedbackService.saveIssueVote", () => {
     await db.delete(agents);
     await db.delete(companies);
     for (const dir of tempDirs) {
-      fs.rmSync(dir, { recursive: true, force: true });
+      await rmRfWithRetries(dir).catch(() => {});
     }
     vi.unstubAllEnvs();
     tempDirs = [];
@@ -131,7 +149,7 @@ describe("feedbackService.saveIssueVote", () => {
   afterAll(async () => {
     await instance?.stop();
     if (dataDir) {
-      fs.rmSync(dataDir, { recursive: true, force: true });
+      await rmRfWithRetries(dataDir).catch(() => {});
     }
   });
 

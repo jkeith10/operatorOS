@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { applyPendingMigrations, ensurePostgresDatabase } from "./client.js";
+import { rmRfWithRetries } from "./test-utils.js";
 
 type EmbeddedPostgresInstance = {
   initialise(): Promise<void>;
@@ -31,7 +32,8 @@ export type EmbeddedPostgresTestDatabase = {
   cleanup(): Promise<void>;
 };
 
-let embeddedPostgresSupportPromise: Promise<EmbeddedPostgresTestSupport> | null = null;
+let embeddedPostgresSupportPromise: Promise<EmbeddedPostgresTestSupport> | null =
+  null;
 
 async function getEmbeddedPostgresCtor(): Promise<EmbeddedPostgresCtor> {
   const mod = await import("embedded-postgres");
@@ -65,7 +67,9 @@ function formatEmbeddedPostgresError(error: unknown): string {
 }
 
 async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSupport> {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-embedded-postgres-probe-"));
+  const dataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "paperclip-embedded-postgres-probe-"),
+  );
   const port = await getAvailablePort();
   const EmbeddedPostgres = await getEmbeddedPostgresCtor();
   const instance = new EmbeddedPostgres({
@@ -90,7 +94,7 @@ async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSuppo
     };
   } finally {
     await instance.stop().catch(() => {});
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await rmRfWithRetries(dataDir).catch(() => {});
   }
 }
 
@@ -131,12 +135,12 @@ export async function startEmbeddedPostgresTestDatabase(
       connectionString,
       cleanup: async () => {
         await instance.stop().catch(() => {});
-        fs.rmSync(dataDir, { recursive: true, force: true });
+        await rmRfWithRetries(dataDir).catch(() => {});
       },
     };
   } catch (error) {
     await instance.stop().catch(() => {});
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await rmRfWithRetries(dataDir).catch(() => {});
     throw new Error(
       `Failed to start embedded PostgreSQL test database: ${formatEmbeddedPostgresError(error)}`,
     );

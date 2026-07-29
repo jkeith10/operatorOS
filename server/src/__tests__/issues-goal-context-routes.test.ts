@@ -1,8 +1,9 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { issueRoutes } from "../routes/issues.js";
 import { errorHandler } from "../middleware/index.js";
+import { issueRoutes } from "../routes/issues.js";
+import { makeBoardActor, withTestActor } from "./helpers/with-test-actor.js";
 
 const mockIssueService = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -38,7 +39,11 @@ vi.mock("../services/index.js", () => ({
   }),
   feedbackService: () => ({
     listIssueVotesForUser: vi.fn(async () => []),
-    saveIssueVote: vi.fn(async () => ({ vote: null, consentEnabledNow: false, sharingEnabled: false })),
+    saveIssueVote: vi.fn(async () => ({
+      vote: null,
+      consentEnabledNow: false,
+      sharingEnabled: false,
+    })),
   }),
   goalService: () => mockGoalService,
   heartbeatService: () => ({
@@ -70,16 +75,16 @@ vi.mock("../services/index.js", () => ({
 function createApp() {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "local-board",
-      companyIds: ["company-1"],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
-    next();
-  });
+  app.use(
+    withTestActor(
+      makeBoardActor({
+        userId: "local-board",
+        companyIds: ["company-1"],
+        source: "local_implicit",
+        isInstanceAdmin: true,
+      }),
+    ),
+  );
   app.use("/api", issueRoutes({} as any, {} as any));
   app.use(errorHandler);
   return app;
@@ -170,7 +175,9 @@ describe("issue goal context routes", () => {
   });
 
   it("surfaces the project goal from GET /issues/:id when the issue has no direct goal", async () => {
-    const res = await request(createApp()).get("/api/issues/11111111-1111-4111-8111-111111111111");
+    const res = await request(createApp()).get(
+      "/api/issues/11111111-1111-4111-8111-111111111111",
+    );
 
     expect(res.status).toBe(200);
     expect(res.body.goalId).toBe(projectGoal.id);

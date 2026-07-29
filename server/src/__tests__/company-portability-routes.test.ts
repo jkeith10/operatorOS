@@ -1,6 +1,8 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PaperclipActor } from "../types/actor.js";
+import { withTestActor } from "./helpers/with-test-actor.js";
 
 const mockCompanyService = vi.hoisted(() => ({
   list: vi.fn(),
@@ -49,15 +51,12 @@ vi.mock("../services/index.js", () => ({
   logActivity: mockLogActivity,
 }));
 
-async function createApp(actor: Record<string, unknown>) {
+async function createApp(actor: PaperclipActor) {
   const { companyRoutes } = await import("../routes/companies.js");
   const { errorHandler } = await import("../middleware/index.js");
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    (req as any).actor = actor;
-    next();
-  });
+  app.use(withTestActor(actor));
   app.use("/api/companies", companyRoutes({} as any));
   app.use(errorHandler);
   return app;

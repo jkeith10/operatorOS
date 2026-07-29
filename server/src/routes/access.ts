@@ -2,41 +2,45 @@ import {
   createHash,
   generateKeyPairSync,
   randomBytes,
-  timingSafeEqual
+  timingSafeEqual,
 } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Router } from "express";
-import type { Request } from "express";
-import { and, eq, isNull, desc } from "drizzle-orm";
 import type { Db } from "@operatoros/db";
 import {
   agentApiKeys,
   authUsers,
   companies,
   invites,
-  joinRequests
+  joinRequests,
 } from "@operatoros/db";
 import {
+  PERMISSION_KEYS,
   acceptInviteSchema,
-  createCliAuthChallengeSchema,
   claimJoinRequestApiKeySchema,
+  createCliAuthChallengeSchema,
   createCompanyInviteSchema,
   createOpenClawInvitePromptSchema,
   listJoinRequestsQuerySchema,
   resolveCliAuthChallengeSchema,
   updateMemberPermissionsSchema,
   updateUserCompanyAccessSchema,
-  PERMISSION_KEYS
 } from "@operatoros/shared";
 import type { DeploymentExposure, DeploymentMode } from "@operatoros/shared";
+import { and, desc, eq, isNull } from "drizzle-orm";
+import { Router } from "express";
+import type { Request } from "express";
 import {
-  forbidden,
+  claimBoardOwnership,
+  inspectBoardClaimChallenge,
+} from "../board-claim.js";
+import {
+  badRequest,
   conflict,
+  forbidden,
   notFound,
   unauthorized,
-  badRequest
 } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { validate } from "../middleware/validate.js";
@@ -46,13 +50,9 @@ import {
   boardAuthService,
   deduplicateAgentName,
   logActivity,
-  notifyHireApproved
+  notifyHireApproved,
 } from "../services/index.js";
 import { assertCompanyAccess } from "./authz.js";
-import {
-  claimBoardOwnership,
-  inspectBoardClaimChallenge
-} from "../board-claim.js";
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
@@ -68,7 +68,11 @@ function createInviteToken() {
   const bytes = randomBytes(INVITE_TOKEN_SUFFIX_LENGTH);
   let suffix = "";
   for (let idx = 0; idx < INVITE_TOKEN_SUFFIX_LENGTH; idx += 1) {
-    suffix += INVITE_TOKEN_ALPHABET[bytes[idx]! % INVITE_TOKEN_ALPHABET.length];
+    const byte = bytes[idx];
+    if (byte === undefined) {
+      throw new Error("Failed to generate invite token suffix");
+    }
+    suffix += INVITE_TOKEN_ALPHABET[byte % INVITE_TOKEN_ALPHABET.length];
   }
   return `${INVITE_TOKEN_PREFIX}${suffix}`;
 }
@@ -116,7 +120,7 @@ function readSkillMarkdown(skillName: string): string | null {
   const candidates = [
     path.resolve(moduleDir, "../../skills", normalized, "SKILL.md"), // published: dist/routes/ -> <pkg>/skills/
     path.resolve(process.cwd(), "skills", normalized, "SKILL.md"), // cwd (e.g. monorepo root)
-    path.resolve(moduleDir, "../../../skills", normalized, "SKILL.md") // dev: src/routes/ -> repo root/skills/
+    path.resolve(moduleDir, "../../../skills", normalized, "SKILL.md"), // dev: src/routes/ -> repo root/skills/
   ];
   for (const skillPath of candidates) {
     try {
@@ -132,14 +136,16 @@ function readSkillMarkdown(skillName: string): string | null {
 function resolvePaperclipSkillsDir(): string | null {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    path.resolve(moduleDir, "../../skills"),         // published
-    path.resolve(process.cwd(), "skills"),           // cwd (monorepo root)
-    path.resolve(moduleDir, "../../../skills"),       // dev
+    path.resolve(moduleDir, "../../skills"), // published
+    path.resolve(process.cwd(), "skills"), // cwd (monorepo root)
+    path.resolve(moduleDir, "../../../skills"), // dev
   ];
   for (const candidate of candidates) {
     try {
       if (fs.statSync(candidate).isDirectory()) return candidate;
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
   return null;
 }
@@ -151,7 +157,7 @@ function parseSkillFrontmatter(markdown: string): { description: string } {
   const yaml = match[1];
   // Extract description — handles both single-line and multi-line YAML values
   const descMatch = yaml.match(
-    /^description:\s*(?:>\s*\n((?:\s{2,}[^\n]*\n?)+)|[|]\s*\n((?:\s{2,}[^\n]*\n?)+)|["']?(.*?)["']?\s*$)/m
+    /^description:\s*(?:>\s*\n((?:\s{2,}[^\n]*\n?)+)|[|]\s*\n((?:\s{2,}[^\n]*\n?)+)|["']?(.*?)["']?\s*$)/m,
   );
   if (!descMatch) return { description: "" };
   const raw = descMatch[1] ?? descMatch[2] ?? descMatch[3] ?? "";
@@ -181,10 +187,14 @@ function listAvailableSkills(): AvailableSkill[] {
   const paperclipSkillNames = new Set<string>();
   if (paperclipSkillsDir) {
     try {
-      for (const entry of fs.readdirSync(paperclipSkillsDir, { withFileTypes: true })) {
+      for (const entry of fs.readdirSync(paperclipSkillsDir, {
+        withFileTypes: true,
+      })) {
         if (entry.isDirectory()) paperclipSkillNames.add(entry.name);
       }
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
 
   const skills: AvailableSkill[] = [];
@@ -199,14 +209,18 @@ function listAvailableSkills(): AvailableSkill[] {
       try {
         const md = fs.readFileSync(skillMdPath, "utf8");
         description = parseSkillFrontmatter(md).description;
-      } catch { /* no SKILL.md or unreadable */ }
+      } catch {
+        /* no SKILL.md or unreadable */
+      }
       skills.push({
         name: entry.name,
         description,
         isPaperclipManaged: paperclipSkillNames.has(entry.name),
       });
     }
-  } catch { /* ~/.claude/skills/ doesn't exist */ }
+  } catch {
+    /* ~/.claude/skills/ doesn't exist */
+  }
 
   skills.sort((a, b) => a.name.localeCompare(b.name));
   return skills;
@@ -248,10 +262,7 @@ function normalizeHostname(value: string | null | undefined): string | null {
   return trimmed.toLowerCase();
 }
 
-function normalizeHeaderValue(
-  value: unknown,
-  depth: number = 0
-): string | null {
+function normalizeHeaderValue(value: unknown, depth = 0): string | null {
   const direct = nonEmptyTrimmedString(value);
   if (direct) return direct;
   if (!isPlainObject(value) || depth >= 3) return null;
@@ -272,13 +283,13 @@ function normalizeHeaderValue(
     "header",
     "raw",
     "text",
-    "string"
+    "string",
   ];
   for (const key of candidateKeys) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
     const normalized = normalizeHeaderValue(
       (value as Record<string, unknown>)[key],
-      depth + 1
+      depth + 1,
     );
     if (normalized) return normalized;
   }
@@ -327,14 +338,14 @@ function extractHeaderEntries(input: unknown): Array<[string, unknown]> {
     if (explicitKey) {
       const explicitValue = Object.prototype.hasOwnProperty.call(
         mapped,
-        "value"
+        "value",
       )
         ? mapped.value
         : Object.prototype.hasOwnProperty.call(mapped, "token")
-        ? mapped.token
-        : Object.prototype.hasOwnProperty.call(mapped, "secret")
-        ? mapped.secret
-        : mapped;
+          ? mapped.token
+          : Object.prototype.hasOwnProperty.call(mapped, "secret")
+            ? mapped.secret
+            : mapped;
       entries.push([explicitKey, explicitValue]);
       continue;
     }
@@ -349,7 +360,7 @@ function extractHeaderEntries(input: unknown): Array<[string, unknown]> {
 }
 
 function normalizeHeaderMap(
-  input: unknown
+  input: unknown,
 ): Record<string, string> | undefined {
   const entries = extractHeaderEntries(input);
   if (entries.length === 0) return undefined;
@@ -374,21 +385,21 @@ function nonEmptyTrimmedString(value: unknown): string | null {
 
 function headerMapHasKeyIgnoreCase(
   headers: Record<string, string>,
-  targetKey: string
+  targetKey: string,
 ): boolean {
   const normalizedTarget = targetKey.trim().toLowerCase();
   return Object.keys(headers).some(
-    (key) => key.trim().toLowerCase() === normalizedTarget
+    (key) => key.trim().toLowerCase() === normalizedTarget,
   );
 }
 
 function headerMapGetIgnoreCase(
   headers: Record<string, string>,
-  targetKey: string
+  targetKey: string,
 ): string | null {
   const normalizedTarget = targetKey.trim().toLowerCase();
   const key = Object.keys(headers).find(
-    (candidate) => candidate.trim().toLowerCase() === normalizedTarget
+    (candidate) => candidate.trim().toLowerCase() === normalizedTarget,
   );
   if (!key) return null;
   const value = headers[key];
@@ -443,10 +454,10 @@ export function buildJoinDefaultsPayloadForAccept(input: {
   const mergedHeaders = normalizeHeaderMap(merged.headers) ?? {};
 
   const inboundOpenClawAuthHeader = nonEmptyTrimmedString(
-    input.inboundOpenClawAuthHeader
+    input.inboundOpenClawAuthHeader,
   );
   const inboundOpenClawTokenHeader = nonEmptyTrimmedString(
-    input.inboundOpenClawTokenHeader
+    input.inboundOpenClawTokenHeader,
   );
   if (
     inboundOpenClawTokenHeader &&
@@ -464,14 +475,14 @@ export function buildJoinDefaultsPayloadForAccept(input: {
   if (Object.keys(mergedHeaders).length > 0) {
     merged.headers = mergedHeaders;
   } else {
-    delete merged.headers;
+    merged.headers = undefined;
   }
 
   const discoveredToken =
     headerMapGetIgnoreCase(mergedHeaders, "x-openclaw-token") ??
     headerMapGetIgnoreCase(mergedHeaders, "x-openclaw-auth") ??
     tokenFromAuthorizationHeader(
-      headerMapGetIgnoreCase(mergedHeaders, "authorization")
+      headerMapGetIgnoreCase(mergedHeaders, "authorization"),
     );
   if (
     discoveredToken &&
@@ -485,7 +496,7 @@ export function buildJoinDefaultsPayloadForAccept(input: {
 
 export function mergeJoinDefaultsPayloadForReplay(
   existingDefaultsPayload: unknown,
-  nextDefaultsPayload: unknown
+  nextDefaultsPayload: unknown,
 ): unknown {
   if (
     !isPlainObject(existingDefaultsPayload) &&
@@ -502,22 +513,22 @@ export function mergeJoinDefaultsPayloadForReplay(
 
   const merged: Record<string, unknown> = {
     ...(existingDefaultsPayload as Record<string, unknown>),
-    ...(nextDefaultsPayload as Record<string, unknown>)
+    ...(nextDefaultsPayload as Record<string, unknown>),
   };
 
   const existingHeaders = normalizeHeaderMap(
-    (existingDefaultsPayload as Record<string, unknown>).headers
+    (existingDefaultsPayload as Record<string, unknown>).headers,
   );
   const nextHeaders = normalizeHeaderMap(
-    (nextDefaultsPayload as Record<string, unknown>).headers
+    (nextDefaultsPayload as Record<string, unknown>).headers,
   );
   if (existingHeaders || nextHeaders) {
     merged.headers = {
       ...(existingHeaders ?? {}),
-      ...(nextHeaders ?? {})
+      ...(nextHeaders ?? {}),
     };
   } else if (Object.prototype.hasOwnProperty.call(merged, "headers")) {
-    delete merged.headers;
+    merged.headers = undefined;
   }
 
   return merged;
@@ -553,14 +564,14 @@ export function canReplayOpenClawGatewayInviteAccept(input: {
 }
 
 function summarizeSecretForLog(
-  value: unknown
+  value: unknown,
 ): { present: true; length: number; sha256Prefix: string } | null {
   const trimmed = nonEmptyTrimmedString(value);
   if (!trimmed) return null;
   return {
     present: true,
     length: trimmed.length,
-    sha256Prefix: hashToken(trimmed).slice(0, 12)
+    sha256Prefix: hashToken(trimmed).slice(0, 12),
   };
 }
 
@@ -570,11 +581,11 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
     : null;
   const headers = defaults ? normalizeHeaderMap(defaults.headers) : undefined;
   const gatewayTokenValue = headers
-    ? headerMapGetIgnoreCase(headers, "x-openclaw-token") ??
+    ? (headerMapGetIgnoreCase(headers, "x-openclaw-token") ??
       headerMapGetIgnoreCase(headers, "x-openclaw-auth") ??
       tokenFromAuthorizationHeader(
-        headerMapGetIgnoreCase(headers, "authorization")
-      )
+        headerMapGetIgnoreCase(headers, "authorization"),
+      ))
     : null;
   return {
     present: Boolean(defaults),
@@ -597,7 +608,7 @@ function summarizeOpenClawGatewayDefaultsForLog(defaultsPayload: unknown) {
     devicePrivateKeyPem: defaults
       ? summarizeSecretForLog(defaults.devicePrivateKeyPem)
       : null,
-    gatewayToken: summarizeSecretForLog(gatewayTokenValue)
+    gatewayToken: summarizeSecretForLog(gatewayTokenValue),
   };
 }
 
@@ -624,16 +635,15 @@ export function normalizeAgentDefaultsForJoin(input: {
       level: "warn",
       message:
         "No OpenClaw gateway config was provided in agentDefaultsPayload.",
-      hint:
-        "Include agentDefaultsPayload.url and headers.x-openclaw-token for OpenClaw gateway joins."
+      hint: "Include agentDefaultsPayload.url and headers.x-openclaw-token for OpenClaw gateway joins.",
     });
     fatalErrors.push(
-      "agentDefaultsPayload is required for adapterType=openclaw_gateway"
+      "agentDefaultsPayload is required for adapterType=openclaw_gateway",
     );
     return {
       normalized: null as Record<string, unknown> | null,
       diagnostics,
-      fatalErrors
+      fatalErrors,
     };
   }
 
@@ -647,7 +657,7 @@ export function normalizeAgentDefaultsForJoin(input: {
       code: "openclaw_gateway_url_missing",
       level: "warn",
       message: "OpenClaw gateway URL is missing.",
-      hint: "Set agentDefaultsPayload.url to ws:// or wss:// gateway URL."
+      hint: "Set agentDefaultsPayload.url to ws:// or wss:// gateway URL.",
     });
     fatalErrors.push("agentDefaultsPayload.url is required");
   } else {
@@ -657,24 +667,24 @@ export function normalizeAgentDefaultsForJoin(input: {
         diagnostics.push({
           code: "openclaw_gateway_url_protocol",
           level: "warn",
-          message: `OpenClaw gateway URL must use ws:// or wss:// (got ${gatewayUrl.protocol}).`
+          message: `OpenClaw gateway URL must use ws:// or wss:// (got ${gatewayUrl.protocol}).`,
         });
         fatalErrors.push(
-          "agentDefaultsPayload.url must use ws:// or wss:// for openclaw_gateway"
+          "agentDefaultsPayload.url must use ws:// or wss:// for openclaw_gateway",
         );
       } else {
         normalized.url = gatewayUrl.toString();
         diagnostics.push({
           code: "openclaw_gateway_url_configured",
           level: "info",
-          message: `Gateway endpoint set to ${gatewayUrl.toString()}`
+          message: `Gateway endpoint set to ${gatewayUrl.toString()}`,
         });
       }
     } catch {
       diagnostics.push({
         code: "openclaw_gateway_url_invalid",
         level: "warn",
-        message: `Invalid OpenClaw gateway URL: ${rawGatewayUrl}`
+        message: `Invalid OpenClaw gateway URL: ${rawGatewayUrl}`,
       });
       fatalErrors.push("agentDefaultsPayload.url is not a valid URL");
     }
@@ -684,7 +694,9 @@ export function normalizeAgentDefaultsForJoin(input: {
   const gatewayToken =
     headerMapGetIgnoreCase(headers, "x-openclaw-token") ??
     headerMapGetIgnoreCase(headers, "x-openclaw-auth") ??
-    tokenFromAuthorizationHeader(headerMapGetIgnoreCase(headers, "authorization"));
+    tokenFromAuthorizationHeader(
+      headerMapGetIgnoreCase(headers, "authorization"),
+    );
   if (gatewayToken && !headerMapHasKeyIgnoreCase(headers, "x-openclaw-token")) {
     headers["x-openclaw-token"] = gatewayToken;
   }
@@ -697,28 +709,26 @@ export function normalizeAgentDefaultsForJoin(input: {
       code: "openclaw_gateway_auth_header_missing",
       level: "warn",
       message: "Gateway auth token is missing from agent defaults.",
-      hint:
-        "Set agentDefaultsPayload.headers.x-openclaw-token (or legacy x-openclaw-auth)."
+      hint: "Set agentDefaultsPayload.headers.x-openclaw-token (or legacy x-openclaw-auth).",
     });
     fatalErrors.push(
-      "agentDefaultsPayload.headers.x-openclaw-token (or x-openclaw-auth) is required"
+      "agentDefaultsPayload.headers.x-openclaw-token (or x-openclaw-auth) is required",
     );
   } else if (gatewayToken.trim().length < 16) {
     diagnostics.push({
       code: "openclaw_gateway_auth_header_too_short",
       level: "warn",
       message: `Gateway auth token appears too short (${gatewayToken.trim().length} chars).`,
-      hint:
-        "Use the full gateway auth token from ~/.openclaw/openclaw.json (typically long random string)."
+      hint: "Use the full gateway auth token from ~/.openclaw/openclaw.json (typically long random string).",
     });
     fatalErrors.push(
-      "agentDefaultsPayload.headers.x-openclaw-token is too short; expected a full gateway token"
+      "agentDefaultsPayload.headers.x-openclaw-token is too short; expected a full gateway token",
     );
   } else {
     diagnostics.push({
       code: "openclaw_gateway_auth_header_configured",
       level: "info",
-      message: "Gateway auth token configured."
+      message: "Gateway auth token configured.",
     });
   }
 
@@ -733,7 +743,7 @@ export function normalizeAgentDefaultsForJoin(input: {
   }
 
   const configuredDevicePrivateKeyPem = nonEmptyTrimmedString(
-    defaults.devicePrivateKeyPem
+    defaults.devicePrivateKeyPem,
   );
   if (configuredDevicePrivateKeyPem) {
     normalized.devicePrivateKeyPem = configuredDevicePrivateKeyPem;
@@ -741,7 +751,7 @@ export function normalizeAgentDefaultsForJoin(input: {
       code: "openclaw_gateway_device_key_configured",
       level: "info",
       message:
-        "Gateway device key configured. Pairing approvals should persist for this agent."
+        "Gateway device key configured. Pairing approvals should persist for this agent.",
     });
   } else if (!disableDeviceAuth) {
     try {
@@ -750,7 +760,7 @@ export function normalizeAgentDefaultsForJoin(input: {
         code: "openclaw_gateway_device_key_generated",
         level: "info",
         message:
-          "Generated persistent gateway device key for this join. Pairing approvals should persist for this agent."
+          "Generated persistent gateway device key for this join. Pairing approvals should persist for this agent.",
       });
     } catch (err) {
       diagnostics.push({
@@ -759,11 +769,10 @@ export function normalizeAgentDefaultsForJoin(input: {
         message: `Failed to generate gateway device key: ${
           err instanceof Error ? err.message : String(err)
         }`,
-        hint:
-          "Set agentDefaultsPayload.devicePrivateKeyPem explicitly or set disableDeviceAuth=true."
+        hint: "Set agentDefaultsPayload.devicePrivateKeyPem explicitly or set disableDeviceAuth=true.",
       });
       fatalErrors.push(
-        "Failed to generate gateway device key. Set devicePrivateKeyPem or disableDeviceAuth=true."
+        "Failed to generate gateway device key. Set devicePrivateKeyPem or disableDeviceAuth=true.",
       );
     }
   }
@@ -773,18 +782,19 @@ export function normalizeAgentDefaultsForJoin(input: {
     Number.isFinite(defaults.waitTimeoutMs)
       ? Math.floor(defaults.waitTimeoutMs)
       : typeof defaults.waitTimeoutMs === "string"
-      ? Number.parseInt(defaults.waitTimeoutMs.trim(), 10)
-      : NaN;
+        ? Number.parseInt(defaults.waitTimeoutMs.trim(), 10)
+        : Number.NaN;
   if (Number.isFinite(waitTimeoutMs) && waitTimeoutMs > 0) {
     normalized.waitTimeoutMs = waitTimeoutMs;
   }
 
   const timeoutSec =
-    typeof defaults.timeoutSec === "number" && Number.isFinite(defaults.timeoutSec)
+    typeof defaults.timeoutSec === "number" &&
+    Number.isFinite(defaults.timeoutSec)
       ? Math.floor(defaults.timeoutSec)
       : typeof defaults.timeoutSec === "string"
-      ? Number.parseInt(defaults.timeoutSec.trim(), 10)
-      : NaN;
+        ? Number.parseInt(defaults.timeoutSec.trim(), 10)
+        : Number.NaN;
   if (Number.isFinite(timeoutSec) && timeoutSec > 0) {
     normalized.timeoutSec = timeoutSec;
   }
@@ -832,21 +842,21 @@ export function normalizeAgentDefaultsForJoin(input: {
         diagnostics.push({
           code: "openclaw_gateway_paperclip_api_url_protocol",
           level: "warn",
-          message: `paperclipApiUrl must use http:// or https:// (got ${parsedPaperclipApiUrl.protocol}).`
+          message: `paperclipApiUrl must use http:// or https:// (got ${parsedPaperclipApiUrl.protocol}).`,
         });
       } else {
         normalized.paperclipApiUrl = parsedPaperclipApiUrl.toString();
         diagnostics.push({
           code: "openclaw_gateway_paperclip_api_url_configured",
           level: "info",
-          message: `paperclipApiUrl set to ${parsedPaperclipApiUrl.toString()}`
+          message: `paperclipApiUrl set to ${parsedPaperclipApiUrl.toString()}`,
         });
       }
     } catch {
       diagnostics.push({
         code: "openclaw_gateway_paperclip_api_url_invalid",
         level: "warn",
-        message: `Invalid paperclipApiUrl: ${rawPaperclipApiUrl}`
+        message: `Invalid paperclipApiUrl: ${rawPaperclipApiUrl}`,
       });
     }
   }
@@ -858,7 +868,7 @@ function toInviteSummaryResponse(
   req: Request,
   token: string,
   invite: typeof invites.$inferSelect,
-  companyName: string | null = null
+  companyName: string | null = null,
 ) {
   const baseUrl = requestBaseUrl(req);
   const onboardingPath = `/api/invites/${token}/onboarding`;
@@ -881,7 +891,7 @@ function toInviteSummaryResponse(
     skillIndexUrl: baseUrl
       ? `${baseUrl}/api/skills/index`
       : "/api/skills/index",
-    inviteMessage
+    inviteMessage,
   };
 }
 
@@ -906,7 +916,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
   const allowSet = new Set(
     input.allowedHostnames
       .map((entry) => normalizeHostname(entry))
-      .filter((entry): entry is string => Boolean(entry))
+      .filter((entry): entry is string => Boolean(entry)),
   );
 
   if (apiHost && isLoopbackHost(apiHost)) {
@@ -915,7 +925,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       level: "warn",
       message:
         "Onboarding URL resolves to loopback hostname. Remote OpenClaw agents cannot reach localhost on your Paperclip host.",
-      hint: "Use a reachable hostname/IP (for example Tailscale hostname, Docker host alias, or public domain)."
+      hint: "Use a reachable hostname/IP (for example Tailscale hostname, Docker host alias, or public domain).",
     });
   }
 
@@ -928,7 +938,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_private_loopback_bind",
       level: "warn",
       message: "Paperclip is bound to loopback in authenticated/private mode.",
-      hint: "Run with a reachable bind host or use pnpm dev --tailscale-auth for private-network onboarding."
+      hint: "Run with a reachable bind host or use pnpm dev --tailscale-auth for private-network onboarding.",
     });
   }
 
@@ -944,7 +954,7 @@ function buildOnboardingDiscoveryDiagnostics(input: {
       code: "openclaw_onboarding_private_host_not_allowed",
       level: "warn",
       message: `Onboarding host "${apiHost}" is not in allowed hostnames for authenticated/private mode.`,
-      hint: `Run pnpm paperclipai allowed-hostname ${apiHost}`
+      hint: `Run pnpm paperclipai allowed-hostname ${apiHost}`,
     });
   }
 
@@ -1001,7 +1011,7 @@ function buildInviteOnboardingManifest(
     deploymentExposure: DeploymentExposure;
     bindHost: string;
     allowedHostnames: string[];
-  }
+  },
 ) {
   const baseUrl = requestBaseUrl(req);
   const skillPath = "/api/skills/paperclip";
@@ -1019,12 +1029,12 @@ function buildInviteOnboardingManifest(
     deploymentMode: opts.deploymentMode,
     deploymentExposure: opts.deploymentExposure,
     bindHost: opts.bindHost,
-    allowedHostnames: opts.allowedHostnames
+    allowedHostnames: opts.allowedHostnames,
   });
   const connectionCandidates = buildOnboardingConnectionCandidates({
     apiBaseUrl: baseUrl,
     bindHost: opts.bindHost,
-    allowedHostnames: opts.allowedHostnames
+    allowedHostnames: opts.allowedHostnames,
   });
 
   return {
@@ -1032,7 +1042,7 @@ function buildInviteOnboardingManifest(
       req,
       token,
       invite,
-      opts.companyName ?? null
+      opts.companyName ?? null,
     ),
     onboarding: {
       instructions:
@@ -1045,20 +1055,20 @@ function buildInviteOnboardingManifest(
         adapterType: "Use 'openclaw_gateway' for OpenClaw Gateway agents",
         capabilities: "Optional capability summary",
         agentDefaultsPayload:
-          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://) and headers.x-openclaw-token (or legacy x-openclaw-auth). Optional fields: paperclipApiUrl, waitTimeoutMs, sessionKeyStrategy, sessionKey, role, scopes, disableDeviceAuth, devicePrivateKeyPem."
+          "Adapter config for OpenClaw gateway. MUST include url (ws:// or wss://) and headers.x-openclaw-token (or legacy x-openclaw-auth). Optional fields: paperclipApiUrl, waitTimeoutMs, sessionKeyStrategy, sessionKey, role, scopes, disableDeviceAuth, devicePrivateKeyPem.",
       },
       registrationEndpoint: {
         method: "POST",
         path: registrationEndpointPath,
-        url: registrationEndpointUrl
+        url: registrationEndpointUrl,
       },
       claimEndpointTemplate: {
         method: "POST",
         path: "/api/join-requests/{requestId}/claim-api-key",
         body: {
           claimSecret:
-            "one-time claim secret returned when the join request is created"
-        }
+            "one-time claim secret returned when the join request is created",
+        },
       },
       connectivity: {
         deploymentMode: opts.deploymentMode,
@@ -1071,20 +1081,20 @@ function buildInviteOnboardingManifest(
           opts.deploymentMode === "authenticated" &&
           opts.deploymentExposure === "private"
             ? "If OpenClaw runs on another machine, ensure the Paperclip hostname is reachable and allowed via `pnpm paperclipai allowed-hostname <host>`."
-            : "Ensure OpenClaw can reach this Paperclip API base URL for invite, claim, and skill bootstrap calls."
+            : "Ensure OpenClaw can reach this Paperclip API base URL for invite, claim, and skill bootstrap calls.",
       },
       textInstructions: {
         path: onboardingTextPath,
         url: onboardingTextUrl,
-        contentType: "text/plain"
+        contentType: "text/plain",
       },
       skill: {
         name: "paperclip",
         path: skillPath,
         url: skillUrl,
-        installPath: "~/.openclaw/skills/paperclip/SKILL.md"
-      }
-    }
+        installPath: "~/.openclaw/skills/paperclip/SKILL.md",
+      },
+    },
   };
 }
 
@@ -1098,7 +1108,7 @@ export function buildInviteOnboardingTextDocument(
     deploymentExposure: DeploymentExposure;
     bindHost: string;
     allowedHostnames: string[];
-  }
+  },
 ) {
   const manifest = buildInviteOnboardingManifest(req, token, invite, opts);
   const onboarding = manifest.onboarding as {
@@ -1195,8 +1205,8 @@ export function buildInviteOnboardingTextDocument(
 
     ## Step 1: Submit agent join request
     ${onboarding.registrationEndpoint.method} ${
-    onboarding.registrationEndpoint.url
-  }
+      onboarding.registrationEndpoint.url
+    }
 
     IMPORTANT: You MUST include agentDefaultsPayload.headers.x-openclaw-token with your gateway token.
     Legacy x-openclaw-auth is also accepted, but x-openclaw-token is preferred.
@@ -1283,10 +1293,10 @@ export function buildInviteOnboardingTextDocument(
   `);
 
   const connectionCandidates = Array.isArray(
-    onboarding.connectivity?.connectionCandidates
+    onboarding.connectivity?.connectionCandidates,
   )
     ? onboarding.connectivity.connectionCandidates.filter(
-        (entry): entry is string => Boolean(entry)
+        (entry): entry is string => Boolean(entry),
       )
     : [];
 
@@ -1329,7 +1339,7 @@ export function buildInviteOnboardingTextDocument(
 }
 
 function extractInviteMessage(
-  invite: typeof invites.$inferSelect
+  invite: typeof invites.$inferSelect,
 ): string | null {
   const rawDefaults = invite.defaultsPayload;
   if (
@@ -1349,7 +1359,7 @@ function extractInviteMessage(
 
 function mergeInviteDefaults(
   defaultsPayload: Record<string, unknown> | null | undefined,
-  agentMessage: string | null
+  agentMessage: string | null,
 ): Record<string, unknown> | null {
   const merged =
     defaultsPayload && typeof defaultsPayload === "object"
@@ -1380,8 +1390,8 @@ function isLocalImplicit(req: Request) {
 
 async function resolveActorEmail(db: Db, req: Request): Promise<string | null> {
   if (isLocalImplicit(req)) return "local@paperclip.local";
+  if (req.actor.type !== "board") return null;
   const userId = req.actor.userId;
-  if (!userId) return null;
   const user = await db
     .select({ email: authUsers.email })
     .from(authUsers)
@@ -1392,7 +1402,7 @@ async function resolveActorEmail(db: Db, req: Request): Promise<string | null> {
 
 function grantsFromDefaults(
   defaultsPayload: Record<string, unknown> | null | undefined,
-  key: "human" | "agent"
+  key: "human" | "agent",
 ): Array<{
   permissionKey: (typeof PERMISSION_KEYS)[number];
   scope: Record<string, unknown> | null;
@@ -1419,14 +1429,14 @@ function grantsFromDefaults(
         typeof record.scope === "object" &&
         !Array.isArray(record.scope)
           ? (record.scope as Record<string, unknown>)
-          : null
+          : null,
     });
   }
   return result;
 }
 
 export function agentJoinGrantsFromDefaults(
-  defaultsPayload: Record<string, unknown> | null | undefined
+  defaultsPayload: Record<string, unknown> | null | undefined,
 ): Array<{
   permissionKey: (typeof PERMISSION_KEYS)[number];
   scope: Record<string, unknown> | null;
@@ -1439,8 +1449,8 @@ export function agentJoinGrantsFromDefaults(
     ...grants,
     {
       permissionKey: "tasks:assign",
-      scope: null
-    }
+      scope: null,
+    },
   ];
 }
 
@@ -1451,14 +1461,14 @@ type JoinRequestManagerCandidate = {
 };
 
 export function resolveJoinRequestAgentManagerId(
-  candidates: JoinRequestManagerCandidate[]
+  candidates: JoinRequestManagerCandidate[],
 ): string | null {
   const ceoCandidates = candidates.filter(
-    (candidate) => candidate.role === "ceo"
+    (candidate) => candidate.role === "ceo",
   );
   if (ceoCandidates.length === 0) return null;
   const rootCeo = ceoCandidates.find(
-    (candidate) => candidate.reportsTo === null
+    (candidate) => candidate.reportsTo === null,
   );
   return (rootCeo ?? ceoCandidates[0] ?? null)?.id ?? null;
 }
@@ -1466,7 +1476,7 @@ export function resolveJoinRequestAgentManagerId(
 function isInviteTokenHashCollisionError(error: unknown) {
   const candidates = [
     error,
-    (error as { cause?: unknown } | null)?.cause ?? null
+    (error as { cause?: unknown } | null)?.cause ?? null,
   ];
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== "object") continue;
@@ -1503,7 +1513,7 @@ type InviteResolutionProbe = {
 
 async function probeInviteResolutionTarget(
   url: URL,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<InviteResolutionProbe> {
   const startedAt = Date.now();
   const controller = new AbortController();
@@ -1512,7 +1522,7 @@ async function probeInviteResolutionTarget(
     const response = await fetch(url, {
       method: "HEAD",
       redirect: "manual",
-      signal: controller.signal
+      signal: controller.signal,
     });
     const durationMs = Date.now() - startedAt;
     if (
@@ -1530,7 +1540,7 @@ async function probeInviteResolutionTarget(
         method: "HEAD",
         durationMs,
         httpStatus: response.status,
-        message: `Webhook endpoint responded to HEAD with HTTP ${response.status}.`
+        message: `Webhook endpoint responded to HEAD with HTTP ${response.status}.`,
       };
     }
     return {
@@ -1538,7 +1548,7 @@ async function probeInviteResolutionTarget(
       method: "HEAD",
       durationMs,
       httpStatus: response.status,
-      message: `Webhook endpoint probe returned HTTP ${response.status}.`
+      message: `Webhook endpoint probe returned HTTP ${response.status}.`,
     };
   } catch (error) {
     const durationMs = Date.now() - startedAt;
@@ -1548,7 +1558,7 @@ async function probeInviteResolutionTarget(
         method: "HEAD",
         durationMs,
         httpStatus: null,
-        message: `Webhook endpoint probe timed out after ${timeoutMs}ms.`
+        message: `Webhook endpoint probe timed out after ${timeoutMs}ms.`,
       };
     }
     return {
@@ -1559,7 +1569,7 @@ async function probeInviteResolutionTarget(
       message:
         error instanceof Error
           ? error.message
-          : "Webhook endpoint probe failed."
+          : "Webhook endpoint probe failed.",
     };
   } finally {
     clearTimeout(timeout);
@@ -1573,7 +1583,7 @@ export function accessRoutes(
     deploymentExposure: DeploymentExposure;
     bindHost: string;
     allowedHostnames: string[];
-  }
+  },
 ) {
   const router = Router();
   const access = accessService(db);
@@ -1604,30 +1614,26 @@ export function accessRoutes(
       typeof req.body?.code === "string" ? req.body.code.trim() : undefined;
     if (!token) throw notFound("Board claim challenge not found");
     if (!code) throw badRequest("Claim code is required");
-    if (
-      req.actor.type !== "board" ||
-      req.actor.source !== "session" ||
-      !req.actor.userId
-    ) {
+    if (req.actor.type !== "board" || req.actor.source !== "session") {
       throw unauthorized("Sign in before claiming board ownership");
     }
 
     const claimed = await claimBoardOwnership(db, {
       token,
       code,
-      userId: req.actor.userId
+      userId: req.actor.userId,
     });
 
     if (claimed.status === "invalid")
       throw notFound("Board claim challenge not found");
     if (claimed.status === "expired")
       throw conflict(
-        "Board claim challenge expired. Restart server to generate a new one."
+        "Board claim challenge expired. Restart server to generate a new one.",
       );
     if (claimed.status === "claimed") {
       res.json({
         claimed: true,
-        userId: claimed.claimedByUserId ?? req.actor.userId
+        userId: claimed.claimedByUserId ?? req.actor.userId,
       });
       return;
     }
@@ -1666,21 +1672,21 @@ export function accessRoutes(
     const challenge = await boardAuth.describeCliAuthChallenge(id, token);
     if (!challenge) throw notFound("CLI auth challenge not found");
 
-    const isSignedInBoardUser =
-      req.actor.type === "board" &&
-      (req.actor.source === "session" || isLocalImplicit(req)) &&
-      Boolean(req.actor.userId);
+    const boardActor = req.actor.type === "board" ? req.actor : null;
+    const isSignedInBoardUser = Boolean(
+      boardActor && (boardActor.source === "session" || isLocalImplicit(req)),
+    );
     const canApprove =
       isSignedInBoardUser &&
       (challenge.requestedAccess !== "instance_admin_required" ||
         isLocalImplicit(req) ||
-        Boolean(req.actor.isInstanceAdmin));
+        Boolean(boardActor?.isInstanceAdmin));
 
     res.json({
       ...challenge,
       requiresSignIn: !isSignedInBoardUser,
       canApprove,
-      currentUserId: req.actor.type === "board" ? req.actor.userId ?? null : null,
+      currentUserId: boardActor?.userId ?? null,
     });
   });
 
@@ -1691,12 +1697,12 @@ export function accessRoutes(
       const id = (req.params.id as string).trim();
       if (
         req.actor.type !== "board" ||
-        (!req.actor.userId && !isLocalImplicit(req))
+        (req.actor.source !== "session" && !isLocalImplicit(req))
       ) {
         throw unauthorized("Sign in before approving CLI access");
       }
 
-      const userId = req.actor.userId ?? "local-board";
+      const userId = req.actor.userId;
       const approved = await boardAuth.approveCliAuthChallenge(
         id,
         req.body.token,
@@ -1742,7 +1748,10 @@ export function accessRoutes(
     validate(resolveCliAuthChallengeSchema),
     async (req, res) => {
       const id = (req.params.id as string).trim();
-      const cancelled = await boardAuth.cancelCliAuthChallenge(id, req.body.token);
+      const cancelled = await boardAuth.cancelCliAuthChallenge(
+        id,
+        req.body.token,
+      );
       res.json({
         status: cancelled.status,
         cancelled: cancelled.status === "cancelled",
@@ -1751,7 +1760,7 @@ export function accessRoutes(
   );
 
   router.get("/cli-auth/me", async (req, res) => {
-    if (req.actor.type !== "board" || !req.actor.userId) {
+    if (req.actor.type !== "board") {
       throw unauthorized("Board authentication required");
     }
     const accessSnapshot = await boardAuth.resolveBoardAccess(req.actor.userId);
@@ -1760,8 +1769,9 @@ export function accessRoutes(
       userId: req.actor.userId,
       isInstanceAdmin: accessSnapshot.isInstanceAdmin,
       companyIds: accessSnapshot.companyIds,
-      source: req.actor.source ?? "none",
-      keyId: req.actor.source === "board_key" ? req.actor.keyId ?? null : null,
+      source: req.actor.source,
+      keyId:
+        req.actor.source === "board_key" ? (req.actor.keyId ?? null) : null,
     });
   });
 
@@ -1798,7 +1808,7 @@ export function accessRoutes(
   async function assertCompanyPermission(
     req: Request,
     companyId: string,
-    permissionKey: any
+    permissionKey: any,
   ) {
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "agent") {
@@ -1807,7 +1817,7 @@ export function accessRoutes(
         companyId,
         "agent",
         req.actor.agentId,
-        permissionKey
+        permissionKey,
       );
       if (!allowed) throw forbidden("Permission denied");
       return;
@@ -1817,14 +1827,14 @@ export function accessRoutes(
     const allowed = await access.canUser(
       companyId,
       req.actor.userId,
-      permissionKey
+      permissionKey,
     );
     if (!allowed) throw forbidden("Permission denied");
   }
 
   async function assertCanGenerateOpenClawInvitePrompt(
     req: Request,
-    companyId: string
+    companyId: string,
   ) {
     assertCompanyAccess(req, companyId);
     if (req.actor.type === "agent") {
@@ -1840,7 +1850,11 @@ export function accessRoutes(
     }
     if (req.actor.type !== "board") throw unauthorized();
     if (isLocalImplicit(req)) return;
-    const allowed = await access.canUser(companyId, req.actor.userId, "users:invite");
+    const allowed = await access.canUser(
+      companyId,
+      req.actor.userId,
+      "users:invite",
+    );
     if (!allowed) throw forbidden("Permission denied");
   }
 
@@ -1861,10 +1875,11 @@ export function accessRoutes(
       allowedJoinTypes: input.allowedJoinTypes,
       defaultsPayload: mergeInviteDefaults(
         input.defaultsPayload ?? null,
-        normalizedAgentMessage
+        normalizedAgentMessage,
       ),
       expiresAt: companyInviteExpiresAt(),
-      invitedByUserId: input.req.actor.userId ?? null
+      invitedByUserId:
+        input.req.actor.type === "board" ? input.req.actor.userId : null,
     };
 
     let token: string | null = null;
@@ -1876,7 +1891,7 @@ export function accessRoutes(
           .insert(invites)
           .values({
             ...insertValues,
-            tokenHash: hashToken(candidateToken)
+            tokenHash: hashToken(candidateToken),
           })
           .returning()
           .then((rows) => rows[0]);
@@ -1916,13 +1931,13 @@ export function accessRoutes(
         { name: "paperclip", path: "/api/skills/paperclip" },
         {
           name: "para-memory-files",
-          path: "/api/skills/para-memory-files"
+          path: "/api/skills/para-memory-files",
         },
         {
           name: "paperclip-create-agent",
-          path: "/api/skills/paperclip-create-agent"
-        }
-      ]
+          path: "/api/skills/paperclip-create-agent",
+        },
+      ],
     });
   });
 
@@ -1945,7 +1960,7 @@ export function accessRoutes(
           companyId,
           allowedJoinTypes: req.body.allowedJoinTypes,
           defaultsPayload: req.body.defaultsPayload ?? null,
-          agentMessage: req.body.agentMessage ?? null
+          agentMessage: req.body.agentMessage ?? null,
         });
 
       await logActivity(db, {
@@ -1953,8 +1968,10 @@ export function accessRoutes(
         actorType: req.actor.type === "agent" ? "agent" : "user",
         actorId:
           req.actor.type === "agent"
-            ? req.actor.agentId ?? "unknown-agent"
-            : req.actor.userId ?? "board",
+            ? req.actor.agentId
+            : req.actor.type === "board"
+              ? req.actor.userId
+              : "board",
         action: "invite.created",
         entityType: "invite",
         entityId: created.id,
@@ -1962,8 +1979,8 @@ export function accessRoutes(
           inviteType: created.inviteType,
           allowedJoinTypes: created.allowedJoinTypes,
           expiresAt: created.expiresAt.toISOString(),
-          hasAgentMessage: Boolean(normalizedAgentMessage)
-        }
+          hasAgentMessage: Boolean(normalizedAgentMessage),
+        },
       });
 
       const companyName = await getInviteCompanyName(created.companyId);
@@ -1971,7 +1988,7 @@ export function accessRoutes(
         req,
         token,
         created,
-        companyName
+        companyName,
       );
       res.status(201).json({
         ...created,
@@ -1980,9 +1997,9 @@ export function accessRoutes(
         companyName,
         onboardingTextPath: inviteSummary.onboardingTextPath,
         onboardingTextUrl: inviteSummary.onboardingTextUrl,
-        inviteMessage: inviteSummary.inviteMessage
+        inviteMessage: inviteSummary.inviteMessage,
       });
-    }
+    },
   );
 
   router.post(
@@ -1997,7 +2014,7 @@ export function accessRoutes(
           companyId,
           allowedJoinTypes: "agent",
           defaultsPayload: null,
-          agentMessage: req.body.agentMessage ?? null
+          agentMessage: req.body.agentMessage ?? null,
         });
 
       await logActivity(db, {
@@ -2005,8 +2022,10 @@ export function accessRoutes(
         actorType: req.actor.type === "agent" ? "agent" : "user",
         actorId:
           req.actor.type === "agent"
-            ? req.actor.agentId ?? "unknown-agent"
-            : req.actor.userId ?? "board",
+            ? req.actor.agentId
+            : req.actor.type === "board"
+              ? req.actor.userId
+              : "board",
         action: "invite.openclaw_prompt_created",
         entityType: "invite",
         entityId: created.id,
@@ -2014,8 +2033,8 @@ export function accessRoutes(
           inviteType: created.inviteType,
           allowedJoinTypes: created.allowedJoinTypes,
           expiresAt: created.expiresAt.toISOString(),
-          hasAgentMessage: Boolean(normalizedAgentMessage)
-        }
+          hasAgentMessage: Boolean(normalizedAgentMessage),
+        },
       });
 
       const companyName = await getInviteCompanyName(created.companyId);
@@ -2023,7 +2042,7 @@ export function accessRoutes(
         req,
         token,
         created,
-        companyName
+        companyName,
       );
       res.status(201).json({
         ...created,
@@ -2032,9 +2051,9 @@ export function accessRoutes(
         companyName,
         onboardingTextPath: inviteSummary.onboardingTextPath,
         onboardingTextUrl: inviteSummary.onboardingTextUrl,
-        inviteMessage: inviteSummary.inviteMessage
+        inviteMessage: inviteSummary.inviteMessage,
       });
-    }
+    },
   );
 
   router.get("/invites/:token", async (req, res) => {
@@ -2071,10 +2090,12 @@ export function accessRoutes(
     }
 
     const companyName = await getInviteCompanyName(invite.companyId);
-    res.json(buildInviteOnboardingManifest(req, token, invite, {
-      ...opts,
-      companyName
-    }));
+    res.json(
+      buildInviteOnboardingManifest(req, token, invite, {
+        ...opts,
+        companyName,
+      }),
+    );
   });
 
   router.get("/invites/:token/onboarding.txt", async (req, res) => {
@@ -2090,14 +2111,12 @@ export function accessRoutes(
     }
 
     const companyName = await getInviteCompanyName(invite.companyId);
-    res
-      .type("text/plain; charset=utf-8")
-      .send(
-        buildInviteOnboardingTextDocument(req, token, invite, {
-          ...opts,
-          companyName
-        })
-      );
+    res.type("text/plain; charset=utf-8").send(
+      buildInviteOnboardingTextDocument(req, token, invite, {
+        ...opts,
+        companyName,
+      }),
+    );
   });
 
   router.get("/invites/:token/test-resolution", async (req, res) => {
@@ -2128,7 +2147,7 @@ export function accessRoutes(
     const parsedTimeoutMs =
       typeof req.query.timeoutMs === "string"
         ? Number(req.query.timeoutMs)
-        : NaN;
+        : Number.NaN;
     const timeoutMs = Number.isFinite(parsedTimeoutMs)
       ? Math.max(1000, Math.min(15000, Math.floor(parsedTimeoutMs)))
       : 5000;
@@ -2138,7 +2157,7 @@ export function accessRoutes(
       testResolutionPath: `/api/invites/${token}/test-resolution`,
       requestedUrl: target.toString(),
       timeoutMs,
-      ...probe
+      ...probe,
     });
   });
 
@@ -2171,15 +2190,12 @@ export function accessRoutes(
         if (req.body.requestType !== "human") {
           throw badRequest("Bootstrap invite requires human request type");
         }
-        if (
-          req.actor.type !== "board" ||
-          (!req.actor.userId && !isLocalImplicit(req))
-        ) {
+        if (req.actor.type !== "board") {
           throw unauthorized(
-            "Authenticated user required for bootstrap acceptance"
+            "Authenticated user required for bootstrap acceptance",
           );
         }
-        const userId = req.actor.userId ?? "local-board";
+        const userId = req.actor.userId;
         const existingAdmin = await access.isInstanceAdmin(userId);
         if (!existingAdmin) {
           await access.promoteInstanceAdmin(userId);
@@ -2194,7 +2210,7 @@ export function accessRoutes(
           inviteId: updatedInvite.id,
           inviteType: updatedInvite.inviteType,
           bootstrapAccepted: true,
-          userId
+          userId,
         });
         return;
       }
@@ -2211,15 +2227,8 @@ export function accessRoutes(
 
       if (requestType === "human" && req.actor.type !== "board") {
         throw unauthorized(
-          "Human invite acceptance requires authenticated user"
+          "Human invite acceptance requires authenticated user",
         );
-      }
-      if (
-        requestType === "human" &&
-        !req.actor.userId &&
-        !isLocalImplicit(req)
-      ) {
-        throw unauthorized("Authenticated user is required");
       }
       if (requestType === "agent" && !req.body.agentName) {
         if (
@@ -2236,13 +2245,13 @@ export function accessRoutes(
         !canReplayOpenClawGatewayInviteAccept({
           requestType,
           adapterType,
-          existingJoinRequest: existingJoinRequestForInvite
+          existingJoinRequest: existingJoinRequestForInvite,
         })
       ) {
         throw notFound("Invite not found");
       }
       const replayJoinRequestId = inviteAlreadyAccepted
-        ? existingJoinRequestForInvite?.id ?? null
+        ? (existingJoinRequestForInvite?.id ?? null)
         : null;
       if (inviteAlreadyAccepted && !replayJoinRequestId) {
         throw conflict("Join request not found");
@@ -2251,9 +2260,9 @@ export function accessRoutes(
       const replayMergedDefaults = inviteAlreadyAccepted
         ? mergeJoinDefaultsPayloadForReplay(
             existingJoinRequestForInvite?.agentDefaultsPayload ?? null,
-            req.body.agentDefaultsPayload ?? null
+            req.body.agentDefaultsPayload ?? null,
           )
-        : req.body.agentDefaultsPayload ?? null;
+        : (req.body.agentDefaultsPayload ?? null);
 
       const gatewayDefaultsPayload =
         requestType === "agent"
@@ -2262,7 +2271,8 @@ export function accessRoutes(
               defaultsPayload: replayMergedDefaults,
               paperclipApiUrl: req.body.paperclipApiUrl ?? null,
               inboundOpenClawAuthHeader: req.header("x-openclaw-auth") ?? null,
-              inboundOpenClawTokenHeader: req.header("x-openclaw-token") ?? null
+              inboundOpenClawTokenHeader:
+                req.header("x-openclaw-token") ?? null,
             })
           : null;
 
@@ -2274,12 +2284,12 @@ export function accessRoutes(
               deploymentMode: opts.deploymentMode,
               deploymentExposure: opts.deploymentExposure,
               bindHost: opts.bindHost,
-              allowedHostnames: opts.allowedHostnames
+              allowedHostnames: opts.allowedHostnames,
             })
           : {
               normalized: null as Record<string, unknown> | null,
               diagnostics: [] as JoinDiagnostic[],
-              fatalErrors: [] as string[]
+              fatalErrors: [] as string[],
             };
 
       if (requestType === "agent" && joinDefaults.fatalErrors.length > 0) {
@@ -2292,13 +2302,13 @@ export function accessRoutes(
             inviteId: invite.id,
             joinRequestDiagnostics: joinDefaults.diagnostics.map((diag) => ({
               code: diag.code,
-              level: diag.level
+              level: diag.level,
             })),
             normalizedAgentDefaults: summarizeOpenClawGatewayDefaultsForLog(
-              joinDefaults.normalized
-            )
+              joinDefaults.normalized,
+            ),
           },
-          "invite accept normalized OpenClaw gateway defaults"
+          "invite accept normalized OpenClaw gateway defaults",
         );
       }
 
@@ -2322,8 +2332,8 @@ export function accessRoutes(
                 and(
                   eq(invites.id, invite.id),
                   isNull(invites.acceptedAt),
-                  isNull(invites.revokedAt)
-                )
+                  isNull(invites.revokedAt),
+                ),
               );
 
             const row = await tx
@@ -2335,8 +2345,8 @@ export function accessRoutes(
                 status: "pending_approval",
                 requestIp: requestIp(req),
                 requestingUserId:
-                  requestType === "human"
-                    ? req.actor.userId ?? "local-board"
+                  requestType === "human" && req.actor.type === "board"
+                    ? req.actor.userId
                     : null,
                 requestEmailSnapshot:
                   requestType === "human" ? actorEmail : null,
@@ -2344,12 +2354,12 @@ export function accessRoutes(
                 adapterType: requestType === "agent" ? adapterType : null,
                 capabilities:
                   requestType === "agent"
-                    ? req.body.capabilities ?? null
+                    ? (req.body.capabilities ?? null)
                     : null,
                 agentDefaultsPayload:
                   requestType === "agent" ? joinDefaults.normalized : null,
                 claimSecretHash,
-                claimSecretExpiresAt
+                claimSecretExpiresAt,
               })
               .returning()
               .then((rows) => rows[0]);
@@ -2361,20 +2371,20 @@ export function accessRoutes(
               requestIp: requestIp(req),
               agentName:
                 requestType === "agent"
-                  ? req.body.agentName ??
+                  ? (req.body.agentName ??
                     existingJoinRequestForInvite?.agentName ??
-                    null
+                    null)
                   : null,
               capabilities:
                 requestType === "agent"
-                  ? req.body.capabilities ??
+                  ? (req.body.capabilities ??
                     existingJoinRequestForInvite?.capabilities ??
-                    null
+                    null)
                   : null,
               adapterType: requestType === "agent" ? adapterType : null,
               agentDefaultsPayload:
                 requestType === "agent" ? joinDefaults.normalized : null,
-              updatedAt: new Date()
+              updatedAt: new Date(),
             })
             .where(eq(joinRequests.id, replayJoinRequestId as string))
             .returning()
@@ -2400,11 +2410,11 @@ export function accessRoutes(
           : {};
         const nextAdapterConfig = {
           ...existingAdapterConfig,
-          ...(joinDefaults.normalized ?? {})
+          ...(joinDefaults.normalized ?? {}),
         };
         const updatedAgent = await agents.update(created.createdAgentId, {
           adapterType,
-          adapterConfig: nextAdapterConfig
+          adapterConfig: nextAdapterConfig,
         });
         if (!updatedAgent) {
           throw conflict("Approved join request agent not found");
@@ -2414,21 +2424,23 @@ export function accessRoutes(
           actorType: req.actor.type === "agent" ? "agent" : "user",
           actorId:
             req.actor.type === "agent"
-              ? req.actor.agentId ?? "invite-agent"
-              : req.actor.userId ?? "board",
+              ? req.actor.agentId
+              : req.actor.type === "board"
+                ? req.actor.userId
+                : "board",
           action: "agent.updated_from_join_replay",
           entityType: "agent",
           entityId: updatedAgent.id,
-          details: { inviteId: invite.id, joinRequestId: created.id }
+          details: { inviteId: invite.id, joinRequestId: created.id },
         });
       }
 
       if (requestType === "agent" && adapterType === "openclaw_gateway") {
         const expectedDefaults = summarizeOpenClawGatewayDefaultsForLog(
-          joinDefaults.normalized
+          joinDefaults.normalized,
         );
         const persistedDefaults = summarizeOpenClawGatewayDefaultsForLog(
-          created.agentDefaultsPayload
+          created.agentDefaultsPayload,
         );
         const missingPersistedFields: string[] = [];
 
@@ -2467,10 +2479,10 @@ export function accessRoutes(
               code: diag.code,
               level: diag.level,
               message: diag.message,
-              hint: diag.hint ?? null
-            }))
+              hint: diag.hint ?? null,
+            })),
           },
-          "invite accept persisted OpenClaw gateway join request"
+          "invite accept persisted OpenClaw gateway join request",
         );
 
         if (missingPersistedFields.length > 0) {
@@ -2478,9 +2490,9 @@ export function accessRoutes(
             {
               inviteId: invite.id,
               joinRequestId: created.id,
-              missingPersistedFields
+              missingPersistedFields,
             },
-            "invite accept detected missing persisted OpenClaw gateway defaults"
+            "invite accept detected missing persisted OpenClaw gateway defaults",
           );
         }
       }
@@ -2490,9 +2502,12 @@ export function accessRoutes(
         actorType: req.actor.type === "agent" ? "agent" : "user",
         actorId:
           req.actor.type === "agent"
-            ? req.actor.agentId ?? "invite-agent"
-            : req.actor.userId ??
-              (requestType === "agent" ? "invite-anon" : "board"),
+            ? req.actor.agentId
+            : req.actor.type === "board"
+              ? req.actor.userId
+              : requestType === "agent"
+                ? "invite-anon"
+                : "board",
         action: inviteAlreadyAccepted
           ? "join.request_replayed"
           : "join.requested",
@@ -2501,8 +2516,8 @@ export function accessRoutes(
         details: {
           requestType,
           requestIp: created.requestIp,
-          inviteReplay: inviteAlreadyAccepted
-        }
+          inviteReplay: inviteAlreadyAccepted,
+        },
       });
 
       const response = toJoinRequestResponse(created);
@@ -2514,15 +2529,15 @@ export function accessRoutes(
           invite,
           {
             ...opts,
-            companyName
-          }
+            companyName,
+          },
         );
         res.status(202).json({
           ...response,
           claimSecret,
           claimApiKeyPath: `/api/join-requests/${created.id}/claim-api-key`,
           onboarding: onboardingManifest.onboarding,
-          diagnostics: joinDefaults.diagnostics
+          diagnostics: joinDefaults.diagnostics,
         });
         return;
       }
@@ -2530,9 +2545,9 @@ export function accessRoutes(
         ...response,
         ...(joinDefaults.diagnostics.length > 0
           ? { diagnostics: joinDefaults.diagnostics }
-          : {})
+          : {}),
       });
-    }
+    },
   );
 
   router.post("/invites/:inviteId/revoke", async (req, res) => {
@@ -2565,11 +2580,13 @@ export function accessRoutes(
         actorType: req.actor.type === "agent" ? "agent" : "user",
         actorId:
           req.actor.type === "agent"
-            ? req.actor.agentId ?? "unknown-agent"
-            : req.actor.userId ?? "board",
+            ? req.actor.agentId
+            : req.actor.type === "board"
+              ? req.actor.userId
+              : "board",
         action: "invite.revoked",
         entityType: "invite",
-        entityId: id
+        entityId: id,
       });
     }
 
@@ -2607,8 +2624,8 @@ export function accessRoutes(
         .where(
           and(
             eq(joinRequests.companyId, companyId),
-            eq(joinRequests.id, requestId)
-          )
+            eq(joinRequests.id, requestId),
+          ),
         )
         .then((rows) => rows[0] ?? null);
       if (!existing) throw notFound("Join request not found");
@@ -2631,25 +2648,25 @@ export function accessRoutes(
           "user",
           existing.requestingUserId,
           "member",
-          "active"
+          "active",
         );
         const grants = grantsFromDefaults(
           invite.defaultsPayload as Record<string, unknown> | null,
-          "human"
+          "human",
         );
         await access.setPrincipalGrants(
           companyId,
           "user",
           existing.requestingUserId,
           grants,
-          req.actor.userId ?? null
+          req.actor.type === "board" ? req.actor.userId : null,
         );
       } else {
         const existingAgents = await agents.list(companyId);
         const managerId = resolveJoinRequestAgentManagerId(existingAgents);
         if (!managerId) {
           throw conflict(
-            "Join request cannot be approved because this company has no active CEO"
+            "Join request cannot be approved because this company has no active CEO",
           );
         }
 
@@ -2658,8 +2675,8 @@ export function accessRoutes(
           existingAgents.map((a) => ({
             id: a.id,
             name: a.name,
-            status: a.status
-          }))
+            status: a.status,
+          })),
         );
 
         const created = await agents.create(companyId, {
@@ -2680,7 +2697,7 @@ export function accessRoutes(
           spentMonthlyCents: 0,
           permissions: {},
           lastHeartbeatAt: null,
-          metadata: null
+          metadata: null,
         });
         createdAgentId = created.id;
         await access.ensureMembership(
@@ -2688,17 +2705,17 @@ export function accessRoutes(
           "agent",
           created.id,
           "member",
-          "active"
+          "active",
         );
         const grants = agentJoinGrantsFromDefaults(
-          invite.defaultsPayload as Record<string, unknown> | null
+          invite.defaultsPayload as Record<string, unknown> | null,
         );
         await access.setPrincipalGrants(
           companyId,
           "agent",
           created.id,
           grants,
-          req.actor.userId ?? null
+          req.actor.type === "board" ? req.actor.userId : null,
         );
       }
 
@@ -2707,10 +2724,10 @@ export function accessRoutes(
         .set({
           status: "approved",
           approvedByUserId:
-            req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+            req.actor.type === "board" ? req.actor.userId : null,
           approvedAt: new Date(),
           createdAgentId,
-          updatedAt: new Date()
+          updatedAt: new Date(),
         })
         .where(eq(joinRequests.id, requestId))
         .returning()
@@ -2718,12 +2735,17 @@ export function accessRoutes(
 
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: req.actor.type === "agent" ? "agent" : "user",
+        actorId:
+          req.actor.type === "agent"
+            ? req.actor.agentId
+            : req.actor.type === "board"
+              ? req.actor.userId
+              : "board",
         action: "join.approved",
         entityType: "join_request",
         entityId: requestId,
-        details: { requestType: existing.requestType, createdAgentId }
+        details: { requestType: existing.requestType, createdAgentId },
       });
 
       if (createdAgentId) {
@@ -2732,12 +2754,12 @@ export function accessRoutes(
           agentId: createdAgentId,
           source: "join_request",
           sourceId: requestId,
-          approvedAt: new Date()
+          approvedAt: new Date(),
         }).catch(() => {});
       }
 
       res.json(toJoinRequestResponse(approved));
-    }
+    },
   );
 
   router.post(
@@ -2753,8 +2775,8 @@ export function accessRoutes(
         .where(
           and(
             eq(joinRequests.companyId, companyId),
-            eq(joinRequests.id, requestId)
-          )
+            eq(joinRequests.id, requestId),
+          ),
         )
         .then((rows) => rows[0] ?? null);
       if (!existing) throw notFound("Join request not found");
@@ -2766,9 +2788,9 @@ export function accessRoutes(
         .set({
           status: "rejected",
           rejectedByUserId:
-            req.actor.userId ?? (isLocalImplicit(req) ? "local-board" : null),
+            req.actor.type === "board" ? req.actor.userId : null,
           rejectedAt: new Date(),
-          updatedAt: new Date()
+          updatedAt: new Date(),
         })
         .where(eq(joinRequests.id, requestId))
         .returning()
@@ -2776,16 +2798,21 @@ export function accessRoutes(
 
       await logActivity(db, {
         companyId,
-        actorType: "user",
-        actorId: req.actor.userId ?? "board",
+        actorType: req.actor.type === "agent" ? "agent" : "user",
+        actorId:
+          req.actor.type === "agent"
+            ? req.actor.agentId
+            : req.actor.type === "board"
+              ? req.actor.userId
+              : "board",
         action: "join.rejected",
         entityType: "join_request",
         entityId: requestId,
-        details: { requestType: existing.requestType }
+        details: { requestType: existing.requestType },
       });
 
       res.json(toJoinRequestResponse(rejected));
-    }
+    },
   );
 
   router.post(
@@ -2835,8 +2862,8 @@ export function accessRoutes(
         .where(
           and(
             eq(joinRequests.id, requestId),
-            isNull(joinRequests.claimSecretConsumedAt)
-          )
+            isNull(joinRequests.claimSecretConsumedAt),
+          ),
         )
         .returning({ id: joinRequests.id })
         .then((rows) => rows[0] ?? null);
@@ -2844,7 +2871,7 @@ export function accessRoutes(
 
       const created = await agents.createApiKey(
         joinRequest.createdAgentId,
-        "initial-join-key"
+        "initial-join-key",
       );
 
       await logActivity(db, {
@@ -2856,17 +2883,17 @@ export function accessRoutes(
         entityId: created.id,
         details: {
           agentId: joinRequest.createdAgentId,
-          joinRequestId: requestId
-        }
+          joinRequestId: requestId,
+        },
       });
 
       res.status(201).json({
         keyId: created.id,
         token: created.token,
         agentId: joinRequest.createdAgentId,
-        createdAt: created.createdAt
+        createdAt: created.createdAt,
       });
-    }
+    },
   );
 
   router.get("/companies/:companyId/members", async (req, res) => {
@@ -2887,11 +2914,11 @@ export function accessRoutes(
         companyId,
         memberId,
         req.body.grants ?? [],
-        req.actor.userId ?? null
+        req.actor.type === "board" ? req.actor.userId : null,
       );
       if (!updated) throw notFound("Member not found");
       res.json(updated);
-    }
+    },
   );
 
   router.post(
@@ -2901,7 +2928,7 @@ export function accessRoutes(
       const userId = req.params.userId as string;
       const result = await access.promoteInstanceAdmin(userId);
       res.status(201).json(result);
-    }
+    },
   );
 
   router.post(
@@ -2912,7 +2939,7 @@ export function accessRoutes(
       const removed = await access.demoteInstanceAdmin(userId);
       if (!removed) throw notFound("Instance admin role not found");
       res.json(removed);
-    }
+    },
   );
 
   router.get("/admin/users/:userId/company-access", async (req, res) => {
@@ -2930,10 +2957,10 @@ export function accessRoutes(
       const userId = req.params.userId as string;
       const memberships = await access.setUserCompanyAccess(
         userId,
-        req.body.companyIds ?? []
+        req.body.companyIds ?? [],
       );
       res.json(memberships);
-    }
+    },
   );
 
   return router;

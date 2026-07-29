@@ -1,10 +1,10 @@
 import express from "express";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { costRoutes } from "../routes/costs.js";
 import { errorHandler } from "../middleware/index.js";
+import { costRoutes } from "../routes/costs.js";
 import type { PaperclipActor } from "../types/actor.js";
-import { withTestActor } from "./helpers/with-test-actor.js";
+import { makeBoardActor, withTestActor } from "./helpers/with-test-actor.js";
 
 function makeDb(overrides: Record<string, unknown> = {}) {
   const selectChain = {
@@ -15,7 +15,6 @@ function makeDb(overrides: Record<string, unknown> = {}) {
     groupBy: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
-    then: vi.fn().mockResolvedValue([]),
   };
 
   const thenableChain = Object.assign(Promise.resolve([]), selectChain);
@@ -23,7 +22,9 @@ function makeDb(overrides: Record<string, unknown> = {}) {
   return {
     select: vi.fn().mockReturnValue(thenableChain),
     insert: vi.fn().mockReturnValue({
-      values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([]) }),
+      values: vi
+        .fn()
+        .mockReturnValue({ returning: vi.fn().mockResolvedValue([]) }),
     }),
     update: vi.fn().mockReturnValue({
       set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
@@ -57,7 +58,13 @@ const mockCostService = vi.hoisted(() => ({
 }));
 const mockFinanceService = vi.hoisted(() => ({
   createEvent: vi.fn(),
-  summary: vi.fn().mockResolvedValue({ debitCents: 0, creditCents: 0, netCents: 0, estimatedDebitCents: 0, eventCount: 0 }),
+  summary: vi.fn().mockResolvedValue({
+    debitCents: 0,
+    creditCents: 0,
+    netCents: 0,
+    estimatedDebitCents: 0,
+    eventCount: 0,
+  }),
   byBiller: vi.fn().mockResolvedValue([]),
   byKind: vi.fn().mockResolvedValue([]),
   list: vi.fn().mockResolvedValue([]),
@@ -92,7 +99,15 @@ vi.mock("../services/quota-windows.js", () => ({
 function createApp() {
   const app = express();
   app.use(express.json());
-  app.use(withTestActor({ type: "board", userId: "board-user", source: "local_implicit" }));
+  app.use(
+    withTestActor(
+      makeBoardActor({
+        userId: "board-user",
+        source: "local_implicit",
+        isInstanceAdmin: true,
+      }),
+    ),
+  );
   app.use("/api", costRoutes(makeDb() as any));
   app.use(errorHandler);
   return app;
@@ -130,7 +145,10 @@ describe("cost routes", () => {
     const app = createApp();
     const res = await request(app)
       .get("/api/companies/company-1/costs/summary")
-      .query({ from: "2026-01-01T00:00:00.000Z", to: "2026-01-31T23:59:59.999Z" });
+      .query({
+        from: "2026-01-01T00:00:00.000Z",
+        to: "2026-01-31T23:59:59.999Z",
+      });
     expect(res.status).toBe(200);
   });
 
@@ -156,7 +174,10 @@ describe("cost routes", () => {
     const app = createApp();
     const res = await request(app)
       .get("/api/companies/company-1/costs/finance-summary")
-      .query({ from: "2026-02-01T00:00:00.000Z", to: "2026-02-28T23:59:59.999Z" });
+      .query({
+        from: "2026-02-01T00:00:00.000Z",
+        to: "2026-02-28T23:59:59.999Z",
+      });
     expect(res.status).toBe(200);
     expect(mockFinanceService.summary).toHaveBeenCalled();
   });
@@ -176,7 +197,11 @@ describe("cost routes", () => {
       .get("/api/companies/company-1/costs/finance-events")
       .query({ limit: "25" });
     expect(res.status).toBe(200);
-    expect(mockFinanceService.list).toHaveBeenCalledWith("company-1", undefined, 25);
+    expect(mockFinanceService.list).toHaveBeenCalledWith(
+      "company-1",
+      undefined,
+      25,
+    );
   });
 
   it("rejects company budget updates for board users outside the company", async () => {

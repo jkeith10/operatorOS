@@ -482,21 +482,31 @@ describe("worktree helpers", () => {
   });
 
   it("rebinds same-repo workspace paths onto the current worktree root", () => {
-    expect(
-      rebindWorkspaceCwd({
-        sourceRepoRoot: "/Users/example/paperclip",
-        targetRepoRoot: "/Users/example/paperclip-pr-432",
-        workspaceCwd: "/Users/example/paperclip",
-      }),
-    ).toBe("/Users/example/paperclip-pr-432");
+    const sourceRepoRoot = process.platform === "win32"
+      ? "C:\\Users\\example\\paperclip"
+      : "/Users/example/paperclip";
+    const targetRepoRoot = process.platform === "win32"
+      ? "C:\\Users\\example\\paperclip-pr-432"
+      : "/Users/example/paperclip-pr-432";
+    const pkgPath = process.platform === "win32"
+      ? "packages\\db"
+      : "packages/db";
 
     expect(
       rebindWorkspaceCwd({
-        sourceRepoRoot: "/Users/example/paperclip",
-        targetRepoRoot: "/Users/example/paperclip-pr-432",
-        workspaceCwd: "/Users/example/paperclip/packages/db",
+        sourceRepoRoot,
+        targetRepoRoot,
+        workspaceCwd: sourceRepoRoot,
       }),
-    ).toBe("/Users/example/paperclip-pr-432/packages/db");
+    ).toBe(targetRepoRoot);
+
+    expect(
+      rebindWorkspaceCwd({
+        sourceRepoRoot,
+        targetRepoRoot,
+        workspaceCwd: `${sourceRepoRoot}${process.platform === "win32" ? "\\" : "/"}${pkgPath}`,
+      }),
+    ).toBe(`${targetRepoRoot}${process.platform === "win32" ? "\\" : "/"}${pkgPath}`);
   });
 
   it("does not rebind paths outside the source repo root", () => {
@@ -549,7 +559,9 @@ describe("worktree helpers", () => {
         copied: true,
       });
       expect(fs.readFileSync(targetHookPath, "utf8")).toBe("#!/usr/bin/env bash\nexit 0\n");
-      expect(fs.statSync(targetHookPath).mode & 0o111).not.toBe(0);
+      if (process.platform !== "win32") {
+        expect(fs.statSync(targetHookPath).mode & 0o111).not.toBe(0);
+      }
       expect(fs.readFileSync(targetTokensPath, "utf8")).toBe("secret-token\n");
     } finally {
       execFileSync("git", ["worktree", "remove", "--force", worktreePath], { cwd: repoRoot, stdio: "ignore" });

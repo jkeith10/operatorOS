@@ -1,0 +1,111 @@
+# Manual published-package browser smoke: Docker onboard harness + Playwright.
+# Requires Docker. Does not run on default PR CI (see ci.yml for source-tree E2E).
+
+name: Release smoke (Docker + Playwright)
+
+on:
+  workflow_dispatch:
+    inputs:
+      paperclip_version:
+        description: "npm dist-tag for paperclipai inside the smoke image"
+        required: true
+        default: "canary"
+        type: choice
+        options:
+          - canary
+          - latest
+      host_port:
+        description: "Host port mapped to container 3100"
+        required: false
+        default: "3232"
+
+permissions:
+  contents: read
+
+jobs:
+  docker-release-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Start Docker onboard smoke (detached)
+        id: smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          META="${RUNNER_TEMP}/smoke-metadata.env"
+          : > "$META"
+          HOST_PORT="${{ github.event.inputs.host_port }}"
+          HOST_PORT="${HOST_PORT:-3232}"
+          export SMOKE_DETACH=true
+          export SMOKE_METADATA_FILE="$META"
+          export HOST_PORT
+          export PAPERCLIPAI_VERSION="${{ github.event.inputs.paperclip_version }}"
+          export DATA_DIR="${GITHUB_WORKSPACE}/data/gh-release-smoke"
+          export PAPERCLIP_PUBLIC_URL="http://127.0.0.1:${HOST_PORT}"
+          bash ./scripts/docker-onboard-smoke.sh
+          echo "metadata_file=$META" >> "$GITHUB_OUTPUT"
+
+      - name: Load smoke metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          META="${{ steps.smoke.outputs.metadata_file }}"
+          if [[ -z "${META}" || ! -f "${META}" ]]; then
+            echo "Smoke metadata file missing; skipping env export."
+            exit 0
+          fi
+          set -a
+          # shellcheck source=/dev/null
+          . "$META"
+          set +a
+          if [[ -z "${SMOKE_BASE_URL:-}" ]]; then
+            echo "Smoke metadata incomplete; skipping env export."
+            exit 0
+          fi
+          echo "PAPERCLIP_RELEASE_SMOKE_BASE_URL=${SMOKE_BASE_URL}" >> "$GITHUB_ENV"
+          echo "PAPERCLIP_RELEASE_SMOKE_EMAIL=${SMOKE_ADMIN_EMAIL}" >> "$GITHUB_ENV"
+          echo "PAPERCLIP_RELEASE_SMOKE_PASSWORD=${SMOKE_ADMIN_PASSWORD}" >> "$GITHUB_ENV"
+          echo "SMOKE_CONTAINER_NAME=${SMOKE_CONTAINER_NAME}" >> "$GITHUB_ENV"
+
+      - name: Run release-smoke Playwright
+        run: pnpm test:release-smoke
+        env:
+          CI: true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-playwright-${{ github.event.inputs.paperclip_version }}
+          path: |
+            tests/release-smoke/playwright-report
+            tests/release-smoke/test-results
+
+      - name: Docker logs and cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          C="${SMOKE_CONTAINER_NAME:-}"
+          if [[ -n "$C" ]] && docker inspect "$C" >/dev/null 2>&1; then
+            echo "---- docker logs $C ----"
+            docker logs "$C" 2>&1 | tail -n 400 || true
+            docker stop "$C" >/dev/null 2>&1 || true
+          fi

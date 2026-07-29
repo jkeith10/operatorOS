@@ -28,6 +28,8 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { errorHandler } from "../middleware/index.js";
 import { accessService } from "../services/access.js";
+import type { PaperclipActor } from "../types/actor.js";
+import { withTestActor } from "./helpers/with-test-actor.js";
 
 vi.mock("../services/index.js", async () => {
   const actual = await vi.importActual<typeof import("../services/index.js")>("../services/index.js");
@@ -121,14 +123,11 @@ describeEmbeddedPostgres(
     await tempDb?.cleanup();
   });
 
-  async function createApp(actor: Record<string, unknown>) {
+  async function createApp(actor: PaperclipActor) {
     const { routineRoutes } = await import("../routes/routines.js");
     const app = express();
     app.use(express.json());
-    app.use((req, _res, next) => {
-      (req as any).actor = actor;
-      next();
-    });
+    app.use(withTestActor(actor));
     app.use("/api", routineRoutes(db));
     app.use(errorHandler);
     return app;

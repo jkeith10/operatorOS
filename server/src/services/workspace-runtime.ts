@@ -405,7 +405,7 @@ async function runWorkspaceCommand(input: {
   const shell = resolveShell();
   const proc = await executeProcess({
     command: shell,
-    args: ["-c", input.command],
+    args: shellInvokeArgs(input.command, false),
     cwd: input.cwd,
     env: input.env,
   });

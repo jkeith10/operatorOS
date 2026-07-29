@@ -3,11 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { testEnvironment } from "@operatoros/adapter-cursor-local/server";
+import { writeFakeCliCommand } from "./helpers/fake-cli-command.js";
 
-async function writeFakeAgentCommand(binDir: string, argsCapturePath: string): Promise<string> {
-  const commandPath = path.join(binDir, "agent");
-  const script = `#!/usr/bin/env node
-const fs = require("node:fs");
+const FAKE_AGENT_PROBE_SCRIPT = `const fs = require("node:fs");
 const outPath = process.env.PAPERCLIP_TEST_ARGS_PATH;
 if (outPath) {
   fs.writeFileSync(outPath, JSON.stringify(process.argv.slice(2)), "utf8");
@@ -22,10 +20,6 @@ console.log(JSON.stringify({
   result: "hello",
 }));
 `;
-  await fs.writeFile(commandPath, script, "utf8");
-  await fs.chmod(commandPath, 0o755);
-  return commandPath;
-}
 
 describe("cursor environment diagnostics", () => {
   beforeEach(() => {
@@ -69,7 +63,7 @@ describe("cursor environment diagnostics", () => {
     const cwd = path.join(root, "workspace");
     const argsCapturePath = path.join(root, "args.json");
     await fs.mkdir(binDir, { recursive: true });
-    await writeFakeAgentCommand(binDir, argsCapturePath);
+    await writeFakeCliCommand(binDir, "agent", FAKE_AGENT_PROBE_SCRIPT);
 
     const result = await testEnvironment({
       companyId: "company-1",
@@ -100,7 +94,7 @@ describe("cursor environment diagnostics", () => {
     const cwd = path.join(root, "workspace");
     const argsCapturePath = path.join(root, "args.json");
     await fs.mkdir(binDir, { recursive: true });
-    await writeFakeAgentCommand(binDir, argsCapturePath);
+    await writeFakeCliCommand(binDir, "agent", FAKE_AGENT_PROBE_SCRIPT);
 
     const result = await testEnvironment({
       companyId: "company-1",

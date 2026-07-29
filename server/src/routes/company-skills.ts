@@ -1,4 +1,3 @@
-import { Router, type Request } from "express";
 import type { Db } from "@operatoros/db";
 import {
   companySkillCreateSchema,
@@ -6,9 +5,15 @@ import {
   companySkillImportSchema,
   companySkillProjectScanRequestSchema,
 } from "@operatoros/shared";
-import { validate } from "../middleware/validate.js";
-import { accessService, agentService, companySkillService, logActivity } from "../services/index.js";
+import { type Request, Router } from "express";
 import { forbidden } from "../errors.js";
+import { validate } from "../middleware/validate.js";
+import {
+  accessService,
+  agentService,
+  companySkillService,
+  logActivity,
+} from "../services/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 
 export function companySkillRoutes(db: Db) {
@@ -17,33 +22,47 @@ export function companySkillRoutes(db: Db) {
   const access = accessService(db);
   const svc = companySkillService(db);
 
-  function canCreateAgents(agent: { permissions: Record<string, unknown> | null | undefined }) {
-    if (!agent.permissions || typeof agent.permissions !== "object") return false;
-    return Boolean((agent.permissions as Record<string, unknown>).canCreateAgents);
+  function canCreateAgents(agent: {
+    permissions: Record<string, unknown> | null | undefined;
+  }) {
+    if (!agent.permissions || typeof agent.permissions !== "object")
+      return false;
+    return Boolean(
+      (agent.permissions as Record<string, unknown>).canCreateAgents,
+    );
   }
 
   async function assertCanMutateCompanySkills(req: Request, companyId: string) {
     assertCompanyAccess(req, companyId);
 
     if (req.actor.type === "board") {
-      if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin) return;
-      const allowed = await access.canUser(companyId, req.actor.userId, "agents:create");
+      if (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin)
+        return;
+      const allowed = await access.canUser(
+        companyId,
+        req.actor.userId,
+        "agents:create",
+      );
       if (!allowed) {
         throw forbidden("Missing permission: agents:create");
       }
       return;
     }
 
-    if (!req.actor.agentId) {
+    if (req.actor.type !== "agent")
       throw forbidden("Agent authentication required");
-    }
 
     const actorAgent = await agents.getById(req.actor.agentId);
     if (!actorAgent || actorAgent.companyId !== companyId) {
       throw forbidden("Agent key cannot access another company");
     }
 
-    const allowedByGrant = await access.hasPermission(companyId, "agent", actorAgent.id, "agents:create");
+    const allowedByGrant = await access.hasPermission(
+      companyId,
+      "agent",
+      actorAgent.id,
+      "agents:create",
+    );
     if (allowedByGrant || canCreateAgents(actorAgent)) {
       return;
     }
@@ -70,30 +89,36 @@ export function companySkillRoutes(db: Db) {
     res.json(result);
   });
 
-  router.get("/companies/:companyId/skills/:skillId/update-status", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const skillId = req.params.skillId as string;
-    assertCompanyAccess(req, companyId);
-    const result = await svc.updateStatus(companyId, skillId);
-    if (!result) {
-      res.status(404).json({ error: "Skill not found" });
-      return;
-    }
-    res.json(result);
-  });
+  router.get(
+    "/companies/:companyId/skills/:skillId/update-status",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      assertCompanyAccess(req, companyId);
+      const result = await svc.updateStatus(companyId, skillId);
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
+      res.json(result);
+    },
+  );
 
-  router.get("/companies/:companyId/skills/:skillId/files", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const skillId = req.params.skillId as string;
-    const relativePath = String(req.query.path ?? "SKILL.md");
-    assertCompanyAccess(req, companyId);
-    const result = await svc.readFile(companyId, skillId, relativePath);
-    if (!result) {
-      res.status(404).json({ error: "Skill not found" });
-      return;
-    }
-    res.json(result);
-  });
+  router.get(
+    "/companies/:companyId/skills/:skillId/files",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      const relativePath = String(req.query.path ?? "SKILL.md");
+      assertCompanyAccess(req, companyId);
+      const result = await svc.readFile(companyId, skillId, relativePath);
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
+      res.json(result);
+    },
+  );
 
   router.post(
     "/companies/:companyId/skills",
@@ -250,34 +275,37 @@ export function companySkillRoutes(db: Db) {
     res.json(result);
   });
 
-  router.post("/companies/:companyId/skills/:skillId/install-update", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    const skillId = req.params.skillId as string;
-    await assertCanMutateCompanySkills(req, companyId);
-    const result = await svc.installUpdate(companyId, skillId);
-    if (!result) {
-      res.status(404).json({ error: "Skill not found" });
-      return;
-    }
+  router.post(
+    "/companies/:companyId/skills/:skillId/install-update",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const result = await svc.installUpdate(companyId, skillId);
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
 
-    const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "company.skill_update_installed",
-      entityType: "company_skill",
-      entityId: result.id,
-      details: {
-        slug: result.slug,
-        sourceRef: result.sourceRef,
-      },
-    });
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "company.skill_update_installed",
+        entityType: "company_skill",
+        entityId: result.id,
+        details: {
+          slug: result.slug,
+          sourceRef: result.sourceRef,
+        },
+      });
 
-    res.json(result);
-  });
+      res.json(result);
+    },
+  );
 
   return router;
 }

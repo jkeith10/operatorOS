@@ -1,52 +1,61 @@
-import express, { Router, type Request as ExpressRequest } from "express";
-import path from "node:path";
 import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Db } from "@operatoros/db";
+import { createHostClientHandlers } from "@operatoros/plugin-sdk";
 import type { DeploymentExposure, DeploymentMode } from "@operatoros/shared";
-import type { StorageService } from "./storage/types.js";
-import { httpLogger, errorHandler } from "./middleware/index.js";
+import express, { Router, type Request as ExpressRequest } from "express";
+import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
-import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
-import { healthRoutes } from "./routes/health.js";
+import { errorHandler, httpLogger } from "./middleware/index.js";
+import { logger } from "./middleware/logger.js";
+import {
+  privateHostnameGuard,
+  resolvePrivateHostnameAllowSet,
+} from "./middleware/private-hostname-guard.js";
+import { accessRoutes } from "./routes/access.js";
+import { activityRoutes } from "./routes/activity.js";
+import { agentRoutes } from "./routes/agents.js";
+import { approvalRoutes } from "./routes/approvals.js";
+import { assetRoutes } from "./routes/assets.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
-import { agentRoutes } from "./routes/agents.js";
-import { projectRoutes } from "./routes/projects.js";
-import { issueRoutes } from "./routes/issues.js";
-import { routineRoutes } from "./routes/routines.js";
+import { costRoutes } from "./routes/costs.js";
+import { dashboardRoutes } from "./routes/dashboard.js";
 import { executionWorkspaceRoutes } from "./routes/execution-workspaces.js";
 import { goalRoutes } from "./routes/goals.js";
-import { approvalRoutes } from "./routes/approvals.js";
-import { secretRoutes } from "./routes/secrets.js";
-import { costRoutes } from "./routes/costs.js";
-import { activityRoutes } from "./routes/activity.js";
-import { dashboardRoutes } from "./routes/dashboard.js";
-import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
+import { healthRoutes } from "./routes/health.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
+import { issueRoutes } from "./routes/issues.js";
 import { llmRoutes } from "./routes/llms.js";
-import { assetRoutes } from "./routes/assets.js";
-import { accessRoutes } from "./routes/access.js";
-import { pluginRoutes } from "./routes/plugins.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
-import { applyUiBranding } from "./ui-branding.js";
-import { logger } from "./middleware/logger.js";
-import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
-import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
-import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
-import { pluginJobStore } from "./services/plugin-job-store.js";
-import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
-import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
-import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
-import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-services.js";
-import { createPluginEventBus } from "./services/plugin-event-bus.js";
+import { pluginRoutes } from "./routes/plugins.js";
+import { projectRoutes } from "./routes/projects.js";
+import { routineRoutes } from "./routes/routines.js";
+import { secretRoutes } from "./routes/secrets.js";
+import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { setPluginEventBus } from "./services/activity-log.js";
 import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
+import { createPluginEventBus } from "./services/plugin-event-bus.js";
 import { createPluginHostServiceCleanup } from "./services/plugin-host-service-cleanup.js";
+import {
+  buildHostServices,
+  flushPluginLogBuffer,
+} from "./services/plugin-host-services.js";
+import { createPluginJobCoordinator } from "./services/plugin-job-coordinator.js";
+import { createPluginJobScheduler } from "./services/plugin-job-scheduler.js";
+import { pluginJobStore } from "./services/plugin-job-store.js";
+import { pluginLifecycleManager } from "./services/plugin-lifecycle.js";
+import {
+  DEFAULT_LOCAL_PLUGIN_DIR,
+  pluginLoader,
+} from "./services/plugin-loader.js";
 import { pluginRegistryService } from "./services/plugin-registry.js";
-import { createHostClientHandlers } from "@operatoros/plugin-sdk";
-import type { BetterAuthSessionResult } from "./auth/better-auth.js";
+import { createPluginToolDispatcher } from "./services/plugin-tool-dispatcher.js";
+import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
+import type { StorageService } from "./storage/types.js";
+import { applyUiBranding } from "./ui-branding.js";
 
 type UiMode = "none" | "static" | "vite-dev";
 const FEEDBACK_EXPORT_FLUSH_INTERVAL_MS = 5_000;
@@ -81,21 +90,26 @@ export async function createApp(
     hostVersion?: string;
     localPluginDir?: string;
     betterAuthHandler?: express.RequestHandler;
-    resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    resolveSession?: (
+      req: ExpressRequest,
+    ) => Promise<BetterAuthSessionResult | null>;
   },
 ) {
   const app = express();
 
-  app.use(express.json({
-    // Company import/export payloads can inline full portable packages.
-    limit: "10mb",
-    verify: (req, _res, buf) => {
-      (req as unknown as { rawBody: Buffer }).rawBody = buf;
-    },
-  }));
+  app.use(
+    express.json({
+      // Company import/export payloads can inline full portable packages.
+      limit: "10mb",
+      verify: (req, _res, buf) => {
+        (req as unknown as { rawBody: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   app.use(httpLogger);
   const privateHostnameGateEnabled =
-    opts.deploymentMode === "authenticated" && opts.deploymentExposure === "private";
+    opts.deploymentMode === "authenticated" &&
+    opts.deploymentExposure === "private";
   const privateHostnameAllowSet = resolvePrivateHostnameAllowSet({
     allowedHostnames: opts.allowedHostnames,
     bindHost: opts.bindHost,
@@ -114,7 +128,7 @@ export async function createApp(
     }),
   );
   app.get("/api/auth/get-session", (req, res) => {
-    if (req.actor.type !== "board" || !req.actor.userId) {
+    if (req.actor.type !== "board") {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
@@ -186,7 +200,10 @@ export async function createApp(
     scheduler,
     jobStore,
   });
-  const hostServiceCleanup = createPluginHostServiceCleanup(lifecycle, hostServicesDisposers);
+  const hostServiceCleanup = createPluginHostServiceCleanup(
+    lifecycle,
+    hostServicesDisposers,
+  );
   const loader = pluginLoader(
     db,
     { localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR },
@@ -206,7 +223,13 @@ export async function createApp(
           const handle = workerManager.getWorker(pluginId);
           if (handle) handle.notify(method, params);
         };
-        const services = buildHostServices(db, pluginId, manifest.id, eventBus, notifyWorker);
+        const services = buildHostServices(
+          db,
+          pluginId,
+          manifest.id,
+          eventBus,
+          notifyWorker,
+        );
         hostServicesDisposers.set(pluginId, () => services.dispose());
         return createHostClientHandlers({
           pluginId,
@@ -238,9 +261,11 @@ export async function createApp(
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
   });
-  app.use(pluginUiStaticRoutes(db, {
-    localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
-  }));
+  app.use(
+    pluginUiStaticRoutes(db, {
+      localPluginDir: opts.localPluginDir ?? DEFAULT_LOCAL_PLUGIN_DIR,
+    }),
+  );
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   if (opts.uiMode === "static") {
@@ -249,9 +274,13 @@ export async function createApp(
       path.resolve(__dirname, "../ui-dist"),
       path.resolve(__dirname, "../../ui/dist"),
     ];
-    const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
+    const uiDist = candidates.find((p) =>
+      fs.existsSync(path.join(p, "index.html")),
+    );
     if (uiDist) {
-      const indexHtml = applyUiBranding(fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"));
+      const indexHtml = applyUiBranding(
+        fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"),
+      );
       app.use(express.static(uiDist));
       app.get(/.*/, (_req, res) => {
         res.status(200).set("Content-Type", "text/html").end(indexHtml);
@@ -275,7 +304,9 @@ export async function createApp(
           port: hmrPort,
           clientPort: hmrPort,
         },
-        allowedHosts: privateHostnameGateEnabled ? Array.from(privateHostnameAllowSet) : undefined,
+        allowedHosts: privateHostnameGateEnabled
+          ? Array.from(privateHostnameAllowSet)
+          : undefined,
       },
     });
 
@@ -284,7 +315,9 @@ export async function createApp(
       try {
         const templatePath = path.resolve(uiRoot, "index.html");
         const template = fs.readFileSync(templatePath, "utf-8");
-        const html = applyUiBranding(await vite.transformIndexHtml(req.originalUrl, template));
+        const html = applyUiBranding(
+          await vite.transformIndexHtml(req.originalUrl, template),
+        );
         res.status(200).set({ "Content-Type": "text/html" }).end(html);
       } catch (err) {
         next(err);
@@ -298,36 +331,45 @@ export async function createApp(
   scheduler.start();
   const feedbackExportTimer = opts.feedbackExportService
     ? setInterval(() => {
-      void opts.feedbackExportService?.flushPendingFeedbackTraces().catch((err) => {
-        logger.error({ err }, "Failed to flush pending feedback exports");
-      });
-    }, FEEDBACK_EXPORT_FLUSH_INTERVAL_MS)
+        void opts.feedbackExportService
+          ?.flushPendingFeedbackTraces()
+          .catch((err) => {
+            logger.error({ err }, "Failed to flush pending feedback exports");
+          });
+      }, FEEDBACK_EXPORT_FLUSH_INTERVAL_MS)
     : null;
   feedbackExportTimer?.unref?.();
   if (opts.feedbackExportService) {
-    void opts.feedbackExportService.flushPendingFeedbackTraces().catch((err) => {
-      logger.error({ err }, "Failed to flush pending feedback exports");
-    });
+    void opts.feedbackExportService
+      .flushPendingFeedbackTraces()
+      .catch((err) => {
+        logger.error({ err }, "Failed to flush pending feedback exports");
+      });
   }
   void toolDispatcher.initialize().catch((err) => {
     logger.error({ err }, "Failed to initialize plugin tool dispatcher");
   });
-  const devWatcher = opts.uiMode === "vite-dev"
-    ? createPluginDevWatcher(
-      lifecycle,
-      async (pluginId) => (await pluginRegistry.getById(pluginId))?.packagePath ?? null,
-    )
-    : null;
-  void loader.loadAll().then((result) => {
-    if (!result) return;
-    for (const loaded of result.results) {
-      if (devWatcher && loaded.success && loaded.plugin.packagePath) {
-        devWatcher.watch(loaded.plugin.id, loaded.plugin.packagePath);
+  const devWatcher =
+    opts.uiMode === "vite-dev"
+      ? createPluginDevWatcher(
+          lifecycle,
+          async (pluginId) =>
+            (await pluginRegistry.getById(pluginId))?.packagePath ?? null,
+        )
+      : null;
+  void loader
+    .loadAll()
+    .then((result) => {
+      if (!result) return;
+      for (const loaded of result.results) {
+        if (devWatcher && loaded.success && loaded.plugin.packagePath) {
+          devWatcher.watch(loaded.plugin.id, loaded.plugin.packagePath);
+        }
       }
-    }
-  }).catch((err) => {
-    logger.error({ err }, "Failed to load ready plugins on startup");
-  });
+    })
+    .catch((err) => {
+      logger.error({ err }, "Failed to load ready plugins on startup");
+    });
   process.once("exit", () => {
     if (feedbackExportTimer) clearInterval(feedbackExportTimer);
     devWatcher?.close();
