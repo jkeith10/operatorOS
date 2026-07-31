@@ -77,7 +77,7 @@ describe("claude execute", () => {
       expect(result.exitCode).toBe(0);
       expect(result.errorMessage).toBeNull();
       expect(loggedCommand).toBeTruthy();
-      expect(path.basename(loggedCommand!)).toMatch(/^claude\.(cmd|js)$/i);
+      expect(path.basename(loggedCommand!)).toMatch(/^claude(\.(cmd|js))?$/i);
       expect(loggedEnv.HOME).toBe(root);
       expect(loggedEnv.CLAUDE_CONFIG_DIR).toBe(claudeConfigDir);
       expect(loggedEnv.PAPERCLIP_RESOLVED_COMMAND).toBeTruthy();

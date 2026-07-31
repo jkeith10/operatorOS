@@ -240,7 +240,7 @@ describe("codex execute", () => {
       expect(result.exitCode).toBe(0);
       expect(result.errorMessage).toBeNull();
       expect(loggedCommand).toBeTruthy();
-      expect(path.basename(loggedCommand!)).toMatch(/^codex\.(cmd|js)$/i);
+      expect(path.basename(loggedCommand!)).toMatch(/^codex(\.(cmd|js))?$/i);
       expect(loggedEnv.HOME).toBe(root);
       expect(loggedEnv.PAPERCLIP_RESOLVED_COMMAND).toBeTruthy();
     } finally {

@@ -66,6 +66,9 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Build packages required for source-tree run
+        run: pnpm --filter @operatoros/shared build && pnpm --filter @operatoros/plugin-sdk build
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium --with-deps
 
