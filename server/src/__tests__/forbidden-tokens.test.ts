@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const {
+  isUsableDynamicToken,
   resolveDynamicForbiddenTokens,
   resolveForbiddenTokens,
   runForbiddenTokenCheck,
@@ -9,13 +10,13 @@ const {
 describe("forbidden token check", () => {
   it("derives username tokens without relying on whoami", () => {
     const tokens = resolveDynamicForbiddenTokens(
-      { USER: "paperclip", LOGNAME: "paperclip", USERNAME: "pc" },
+      { USER: "paperclip", LOGNAME: "paperclip", USERNAME: "pcdev" },
       {
         userInfo: () => ({ username: "paperclip" }),
       },
     );
 
-    expect(tokens).toEqual(["paperclip", "pc"]);
+    expect(tokens).toEqual(["paperclip", "pcdev"]);
   });
 
   it("falls back cleanly when user resolution fails", () => {
@@ -29,6 +30,32 @@ describe("forbidden token check", () => {
     );
 
     expect(tokens).toEqual([]);
+  });
+
+  it("skips dynamic username tokens in CI", () => {
+    const tokens = resolveDynamicForbiddenTokens(
+      { CI: "true", USER: "runner", LOGNAME: "runner", USERNAME: "runner" },
+      {
+        userInfo: () => ({ username: "runner" }),
+      },
+    );
+
+    expect(tokens).toEqual([]);
+  });
+
+  it("filters generic usernames that collide with product wording", () => {
+    expect(isUsableDynamicToken("runner")).toBe(false);
+    expect(isUsableDynamicToken("ab")).toBe(false);
+    expect(isUsableDynamicToken("jkeith10")).toBe(true);
+
+    const tokens = resolveDynamicForbiddenTokens(
+      { USER: "runner", LOGNAME: "jkeith10", USERNAME: "admin" },
+      {
+        userInfo: () => ({ username: "ubuntu" }),
+      },
+    );
+
+    expect(tokens).toEqual(["jkeith10"]);
   });
 
   it("merges dynamic and file-based forbidden tokens", async () => {

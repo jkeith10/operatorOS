@@ -21,7 +21,39 @@ function uniqueNonEmpty(values) {
   return Array.from(new Set(values.map((value) => value?.trim() ?? "").filter(Boolean)));
 }
 
+/**
+ * Generic / CI account names that commonly appear as English product words
+ * (e.g. GitHub Actions user `runner` matches "dev runner"). These are not useful
+ * as identity-leak guards for npm publishing.
+ */
+const GENERIC_DYNAMIC_USERNAMES = new Set([
+  "runner",
+  "ubuntu",
+  "user",
+  "admin",
+  "root",
+  "nobody",
+  "container",
+  "github",
+  "actions",
+  "node",
+  "pnpm",
+  "npm",
+]);
+
+export function isUsableDynamicToken(token) {
+  const normalized = token?.trim() ?? "";
+  if (normalized.length < 3) return false;
+  return !GENERIC_DYNAMIC_USERNAMES.has(normalized.toLowerCase());
+}
+
 export function resolveDynamicForbiddenTokens(env = process.env, osModule = os) {
+  // CI runners use generic accounts (often `runner`); scanning for them creates
+  // false positives and does not protect a developer identity from publish leaks.
+  if (String(env.CI ?? "").toLowerCase() === "true") {
+    return [];
+  }
+
   const candidates = [env.USER, env.LOGNAME, env.USERNAME];
 
   try {
@@ -30,7 +62,7 @@ export function resolveDynamicForbiddenTokens(env = process.env, osModule = os) 
     // Some environments do not expose userInfo; env vars are enough fallback.
   }
 
-  return uniqueNonEmpty(candidates);
+  return uniqueNonEmpty(candidates).filter(isUsableDynamicToken);
 }
 
 export function readForbiddenTokensFile(tokensFile) {

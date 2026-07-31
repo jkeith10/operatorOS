@@ -119,6 +119,7 @@ program
   .option("-i, --instance <id>", "Local instance id (default: default)")
   .option("--repair", "Attempt automatic repairs during doctor", true)
   .option("--no-repair", "Disable automatic repairs during doctor")
+  .option("-y, --yes", "Non-interactive: create quickstart config if missing (also skips doctor confirmations)")
   .action(runCommand);
 
 const heartbeat = program.command("heartbeat").description("Heartbeat utilities");
